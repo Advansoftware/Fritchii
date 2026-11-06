@@ -38,11 +38,13 @@ constexpr u32 TbzInstruction = 0x360041E8;
 constexpr u32 BranchInstruction = 0x1400020F;
 constexpr u32 NopInstruction = 0xD503201F;
 
-constexpr std::array<std::pair<Common::FS::EdenPath, const char*>, 4> TestDirectories{{
+constexpr std::array<std::pair<Common::FS::EdenPath, const char*>, 6> TestDirectories{{
     {Common::FS::EdenPath::NANDDir, "nand"},
     {Common::FS::EdenPath::SDMCDir, "sdmc"},
     {Common::FS::EdenPath::LoadDir, "load"},
     {Common::FS::EdenPath::DumpDir, "dump"},
+    {Common::FS::EdenPath::KeysDir, "keys"},
+    {Common::FS::EdenPath::ConfigDir, "config"},
 }};
 
 void WriteIps(const std::filesystem::path& path, u32 word) {
@@ -63,6 +65,10 @@ void WriteIps(const std::filesystem::path& path, u32 word) {
 class PatchManagerTestContext {
 public:
     explicit PatchManagerTestContext(std::optional<u32> user_mod_word = std::nullopt) {
+        if (const auto it = Settings::values.disabled_addons.find(OcarinaTitleId);
+            it != Settings::values.disabled_addons.end()) {
+            previous_disabled = it->second;
+        }
         for (size_t i = 0; i < TestDirectories.size(); ++i) {
             const auto& [path, name] = TestDirectories[i];
             previous[i] = Common::FS::GetEdenPath(path);
@@ -76,16 +82,22 @@ public:
             std::filesystem::create_directories(exefs);
             WriteIps(exefs / fmt::format("{}.ips", OcarinaBuildIdHex), *user_mod_word);
         }
-        system.SetFilesystem(std::make_shared<FileSys::RealVfsFilesystem>());
-        system.SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
-        system.GetFileSystemController().CreateFactories(*system.GetFilesystem());
+        system.emplace();
+        system->SetFilesystem(std::make_shared<FileSys::RealVfsFilesystem>());
+        system->SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
+        system->GetFileSystemController().CreateFactories(*system->GetFilesystem());
     }
 
     ~PatchManagerTestContext() {
+        system.reset();
         for (size_t i = 0; i < TestDirectories.size(); ++i) {
             Common::FS::SetEdenPath(TestDirectories[i].first, previous[i]);
         }
-        Settings::values.disabled_addons.erase(OcarinaTitleId);
+        if (previous_disabled) {
+            Settings::values.disabled_addons[OcarinaTitleId] = std::move(*previous_disabled);
+        } else {
+            Settings::values.disabled_addons.erase(OcarinaTitleId);
+        }
         std::error_code error;
         std::filesystem::remove_all(root, error);
     }
@@ -94,17 +106,33 @@ public:
     PatchManagerTestContext& operator=(const PatchManagerTestContext&) = delete;
 
     FileSys::PatchManager Manager(u64 title_id = OcarinaTitleId) {
-        return FileSys::PatchManager{title_id, system.GetFileSystemController(),
-                                     system.GetContentProvider()};
+        return FileSys::PatchManager{title_id, system->GetFileSystemController(),
+                                     system->GetContentProvider()};
+    }
+
+    void AddUserBytePatch(u32 offset, u8 value) {
+        const auto exefs = root / "load" / fmt::format("{:016X}", OcarinaTitleId) / "UserMod" / "exefs";
+        std::filesystem::create_directories(exefs);
+        const std::array<u8, 16> ips{
+            'I', 'P', 'S', '3', '2',
+            static_cast<u8>(offset >> 24), static_cast<u8>(offset >> 16),
+            static_cast<u8>(offset >> 8), static_cast<u8>(offset),
+            0, 1, value, 'E', 'E', 'O', 'F',
+        };
+        std::ofstream file{exefs / fmt::format("{}.ips", OcarinaBuildIdHex), std::ios::binary};
+        file.write(reinterpret_cast<const char*>(ips.data()), static_cast<std::streamsize>(ips.size()));
+        file.flush();
+        REQUIRE(file.good());
     }
 
 private:
     std::array<std::filesystem::path, TestDirectories.size()> previous;
+    std::optional<std::vector<std::string>> previous_disabled;
     const std::filesystem::path root =
         std::filesystem::temp_directory_path() /
         ("builtin-patch-test-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    Core::System system;
+    std::optional<Core::System> system;
 };
 
 std::vector<u8> MakeMain(const FileSys::PatchManager::BuildID& build_id, u32 word) {
@@ -203,4 +231,25 @@ TEST_CASE("Built-in Max Resolution patch is listed and loaded for Ocarina's main
 
     Settings::values.disabled_addons[OcarinaTitleId] = {std::string{MaxResolution}};
     REQUIRE_FALSE(builtin_enabled());
+}
+
+TEST_CASE("Built-in patches preserve user overrides on already-patched input", "[patch_manager]") {
+    PatchManagerTestContext context;
+    constexpr size_t CallOffset = sizeof(Loader::NSOHeader) + 0x6E6CC4;
+    constexpr u32 RoutineLastByte = sizeof(Loader::NSOHeader) + 0x3C46200 + 119;
+    constexpr std::array<u8, 4> DynamicCall{0x4F, 0x7D, 0xD5, 0x94};
+
+    auto nso = MakeMain(OcarinaBuildId, NopInstruction);
+    nso.resize(RoutineLastByte + 1);
+    nso = context.Manager().PatchNSO(nso, "main");
+    REQUIRE(nso.size() == RoutineLastByte + 1);
+    REQUIRE(std::equal(DynamicCall.begin(), DynamicCall.end(), nso.begin() + CallOffset));
+    REQUIRE(nso[RoutineLastByte] == 0x3F);
+
+    constexpr u8 UserByte = 0x5A;
+    context.AddUserBytePatch(RoutineLastByte, UserByte);
+    auto expected = nso;
+    expected[RoutineLastByte] = UserByte;
+    const auto patched = context.Manager().PatchNSO(nso, "main");
+    REQUIRE(std::ranges::equal(patched, expected));
 }

@@ -634,8 +634,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
                     break;
                 }
             }
-            if (!std::equal(record.bytes.begin(), record.bytes.end(), nso.begin() + offset) &&
-                !std::equal(nso.begin() + offset, nso.begin() + offset + record.bytes.size(),
+            if (!std::equal(nso.begin() + offset, nso.begin() + offset + record.bytes.size(),
                             out.begin() + offset)) {
                 LOG_INFO(Loader,
                          "    - Skipping \"{}\": a user mod already patched {}+{:#x}, the mod's "
