@@ -166,6 +166,11 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
         }
     }
     display_title = meta.title_name;
+    for (const auto& [lang, name] : meta.localized_titles) {
+        if (lang == "en-us" && !name.empty()) {
+            display_title = name;
+        }
+    }
     has_program = true;
 
     const auto exefs = nup->GetExeFSDir(*exefs_index);
