@@ -163,7 +163,7 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
             meta.localized_icons = base.localized_icons;
         }
     }
-    display_title = program.title_name;
+    display_title = meta.title_name;
     has_program = true;
 
     const auto exefs = nup->GetExeFSDir(*exefs_index);
