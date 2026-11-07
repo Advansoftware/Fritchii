@@ -36,6 +36,9 @@ struct TranslationRecord {
     bool keep_infos{};
     bool libraries{};
     bool complete{};       ///< The translation got as far as the SPIR-V of every stage
+    /// Drawn through the task/mesh compute fallback (no VK_EXT_mesh_shader): its SPIR-V is the
+    /// compute form, and the pipeline needs the fallback's setup, which is not kept.
+    bool mesh_emulated{};
     bool translate_only{}; ///< Stop there: no shader modules, no pipeline
 };
 
