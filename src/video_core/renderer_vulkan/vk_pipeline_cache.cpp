@@ -61,6 +61,7 @@
 #include "video_core/pipeline_cache_policy.h"
 #include "video_core/renderer_vulkan/async_draw_policy.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
+#include "video_core/renderer_vulkan/mesh_fallback_limits.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 #include "video_core/renderer_vulkan/pipeline_shader_emission.h"
@@ -5839,6 +5840,26 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                             key.state.patch_control_points_minus_one.Value() + 1, max_patch_size);
                 return nullptr;
             }
+        }
+    }
+    // The mesh fallback binds its output buffer (and, for task draws, payload, offsets and
+    // indirect arguments) into the descriptor set every stage shares: with the stages' own storage
+    // buffers they must fit the set's limit (zortos293/Lichii#642; only fallback pipelines).
+    if (const u32 set_limit = host_info.max_descriptor_set_storage_buffers;
+        mesh_emulation && set_limit != 0) {
+        size_t storage_buffers{};
+        for (size_t index = uses_vertex_a && uses_vertex_b ? 1 : 0;
+             index < Maxwell::MaxShaderProgram; ++index) {
+            if (key.unique_hashes[index] != 0) {
+                storage_buffers +=
+                    Shader::NumDescriptors(programs[index].info.storage_buffers_descriptors);
+            }
+        }
+        const size_t auxiliary_buffers{mesh_emulation->has_task ? 4U : 1U};
+        if (!FitsStorageBufferSetLimit(storage_buffers, auxiliary_buffers, set_limit)) {
+            throw Shader::NotImplementedException(
+                "Binding {} storage buffers ({} for mesh fallback) to a descriptor set limited to {}",
+                storage_buffers + auxiliary_buffers, auxiliary_buffers, set_limit);
         }
     }
     // Graphics pipeline libraries (EDEN_NX2_GPL). Left on the monolithic route: task and mesh
