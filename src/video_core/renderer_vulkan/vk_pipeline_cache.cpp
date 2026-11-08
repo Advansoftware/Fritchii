@@ -2591,16 +2591,6 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             ref.key_hash = Common::CityHash64(reinterpret_cast<const char*>(&key), sizeof(key));
         }
 
-        // Task/mesh pipelines carry their mesh registers since this format stored them (no
-        // earlier record of this cache version holds one).
-        if (!device.IsExtMeshShaderSupported() &&
-            std::ranges::any_of(envs, [](const FileEnvironment& env) {
-                return env.ShaderStage() == Shader::Stage::Task ||
-                       env.ShaderStage() == Shader::Stage::Mesh;
-            })) {
-            return;
-        }
-
         if ((key.state.extended_dynamic_state != 0) !=
                 dynamic_features.has_extended_dynamic_state ||
             (key.state.extended_dynamic_state_2 != 0) !=
