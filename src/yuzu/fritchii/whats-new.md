@@ -4,13 +4,22 @@ e.g. E:\OotRemakeEmulation\release\fritchii-vX\notes.md) here before the release
 download instructions at the top are dropped in the app. While this file holds only this comment,
 no "What's new" window pops up after an update (Help > What's New says there are no notes yet).
 -->
-## ⬇️ Download this file: **`Fritchii-v5.4-Windows-x64.zip`**
+## ⬇️ Download this file: **`Fritchii-v5.5-Windows-x64.zip`**
 
-On Fritchii v4 to v5.3 you don't need to download anything: it offers this update when you open it. Otherwise unzip it anywhere and run `Fritchii-v5.4\lichii.exe`. Don't download "Source code (zip)" or "Source code (tar.gz)": they contain no emulator.
+On Fritchii v4 to v5.4 you don't need to download anything: it offers this update when you open it. Otherwise unzip it anywhere and run `Fritchii-v5.5\lichii.exe`. Don't download "Source code (zip)" or "Source code (tar.gz)": they contain no emulator.
 
 ---
 
-Fritchii v5.4: shader preparation for AMD.
+Fritchii v5.5, fixes.
+
+- **No more flickering camera for players who had frame generation on before v5.** Fritchii has no frame generation, but an old setting kept it running in the background (and turned off Fritchii's frame pacing). It can't run anymore.
+- **Extended Dynamic State is set back to EDS2 once.** Players who set it to Disabled or EDS3 (often an old AMD crash tip) had "Preparing shaders" skip almost every shader. EDS2 is what the shaders are recorded with, and the AMD crash that tip avoided is fixed since v5.3. You can still change it afterwards.
+- **NVIDIA: the shader cache size is set by Fritchii itself.** Newer drivers no longer show "Shader Cache Size" in the NVIDIA Control Panel. Fritchii now tells the driver to keep a large cache for Fritchii only, nothing else on your PC changes.
+- **DLSS fixes:** the "Use NVIDIA DLSS" checkbox could be overridden by an old per-game value and show unchecked in game; it's a global setting now. New **DLSS preset** option (Default, J, K recommended, L, M) in Graphics.
+- Graphics > Extensions now says it: GPU thread pinning is built in and on automatically.
+- The old "Prepare Shaders" window says it's the optional quick warm-up (the full preparation runs by itself when you start the game).
+
+### In v5.4
 
 - **AMD: "Preparing shaders" now prepares the whole game.** Until now it skipped 116,373 of OoT's 120,461 shaders on AMD (it finished in seconds) because they were recorded on an NVIDIA card, which handles one GPU setting (the dynamic logic operation) differently. Fritchii now converts them for AMD's driver: all of them get prepared, so new areas play like you've been there before, as on NVIDIA. Thanks to koriko for the log that pinned it.
 - **AMD: expect a full "Preparing shaders" screen once** (around 15 minutes on an 8-core CPU), even if you went through it on v5.x. After that it's straight into the game.
