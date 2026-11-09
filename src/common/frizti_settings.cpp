@@ -40,6 +40,11 @@ std::vector<BasicSetting*> TunedSettings(Values& values) {
         &values.cpu_accuracy,             // Auto
         &values.use_disk_shader_cache,    // On: no shader rebuild every boot
         &values.use_vulkan_driver_pipeline_cache, // On
+        // EDS2 and dynamic vertex input: the precompiled OoT recipe is recorded with them, and
+        // players who turned them off (an old AMD crash tip; the crash was shader libraries) had
+        // every graphics pipeline skipped as "for another device" (2026-11-09, RX 9070 XT log).
+        &values.dyna_state,                 // EDS2
+        &values.vertex_input_dynamic_state, // On
     };
 }
 
