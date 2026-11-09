@@ -4,21 +4,25 @@ e.g. E:\OotRemakeEmulation\release\fritchii-vX\notes.md) here before the release
 download instructions at the top are dropped in the app. While this file holds only this comment,
 no "What's new" window pops up after an update (Help > What's New says there are no notes yet).
 -->
-## ⬇️ Download this file: **`Fritchii-v5.1-Windows-x64.zip`**
+## ⬇️ Download this file: **`Fritchii-v5.2-Windows-x64.zip`**
 
-On Fritchii v4, v4.1 or v5 you don't need to download anything: it offers this update when you open it. Otherwise unzip it anywhere and run `Fritchii-v5.1\lichii.exe`. Don't download "Source code (zip)" or "Source code (tar.gz)": they contain no emulator.
-
-**Don't delete your shader cache** unless it's broken (see below). **NVIDIA players:** set Shader Cache Size to **Unlimited** once.
+On Fritchii v4, v4.1, v5 or v5.1 you don't need to download anything: it offers this update when you open it. Otherwise unzip it anywhere and run `Fritchii-v5.2\lichii.exe`. Don't download "Source code (zip)" or "Source code (tar.gz)": they contain no emulator.
 
 ---
 
-Fritchii v5.1, a fix-up for v5.
+Fritchii v5.2, crash fixes.
+
+- **AMD: textures no longer write into other textures' memory.** Images whose size isn't a multiple of their block size wrote past their edge while being decoded. NVIDIA ignores that, AMD put it in other textures: black blocks, a crosshatch, and in the end a GPU crash. From CheezerWheezer's AMD fork.
+- **No more crash when the PC's memory budget is reached** during long sessions (seen in Castle Town after half an hour). Buffers in system memory may now go over Windows' budget, like textures already could. Also from CheezerWheezer's AMD fork.
+
+### In v5.1
 
 - **Dialogue text no longer turns into scraps of other textures.** Each new text box size could show garbage the first time it appeared.
 - **Delete Shader Cache** in the Help menu (and when you right-click the game on the home screen), with a confirmation. Only for a cache that went bad: the shaders are prepared again on the next start.
 - **AMD: likely fix for a crash right after pressing Play** (seen on an RX 6600 with a shader cache from v4). v5's change for the red line in the Royal Family's Tomb is taken back for now, so that line can show again on AMD until it's redone and tested on AMD hardware.
 - One v5 change to how GPU memory is refreshed after small writes is taken back too: in this emulator it could bring back stale data.
-- **4K and scaled displays:** Fritchii now uses exactly the scale set in Windows. 150% on a 4K screen became 200% (windows too big, dialogs cut off) and 125% became 100% (tiny text).
+- **4K and scaled displays:** Fritchii follows the scale set in Windows, as far as your screen leaves room for its windows. 150% on a 4K screen used to become 200% (windows too big, dialogs cut off) and 125% became 100% (tiny text).
+- **Game Settings fits the screen:** long tabs scroll, the window resizes, and OK / Apply are always reachable.
 
 ### Everything new in v5
 
