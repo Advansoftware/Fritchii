@@ -26,10 +26,6 @@ EDEN_NX2_FENCE_BATCH=1
 # Terrain/indirect drawing fix for Donkey Kong Bananza: enabled by default. Set to 0 only to leave to GPU.
 #EDEN_NX2_RESETFIX=0
 
-# Linux AMD (RADV): task/mesh draws take the compute fallback, because native mesh draws reset the
-# GPU there (#316). =1 keeps native mesh shaders, to test whether a newer Mesa still resets.
-#EDEN_NX2_NATIVE_MESH=1
-
 # Drop reactive-flushing read traps on Switch 2 programs (opt-in; can reduce FPS from 29 to 24 in MKW).
 #EDEN_NX2_NO_REACTIVE=1
 
