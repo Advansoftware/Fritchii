@@ -368,33 +368,6 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     }
     info.force_early_z = key.state.early_z != 0;
     info.y_negate = key.state.y_negate != 0;
-    // Transform feedback would capture the scaled values, a passthrough geometry shader doesn't
-    // scale the outputs it writes itself, and indexed attribute reads in the fragment stage don't
-    // undo the scaling, so all three keep native noperspective interpolation.
-    const bool geometry_passthrough{key.unique_hashes[4] != 0 &&
-                                    programs[4].is_geometry_passthrough};
-    if (key.unique_hashes[5] != 0 && !geometry_passthrough && key.state.xfb_enabled == 0 &&
-        !programs[5].info.loads_indexed_attributes) {
-        const bool has_tess{key.unique_hashes[3] != 0};
-        const bool last_pre_raster{
-            (stage == Shader::Stage::VertexB && !has_tess && !has_geometry) ||
-            (stage == Shader::Stage::TessellationEval && !has_geometry) ||
-            (stage == Shader::Stage::Geometry && has_geometry)};
-        if (stage == Shader::Stage::Fragment) {
-            info.scaled_noperspective_inputs =
-                previous_program && (previous_program->stage == Shader::Stage::VertexB ||
-                                     previous_program->stage == Shader::Stage::TessellationEval ||
-                                     previous_program->stage == Shader::Stage::Geometry);
-        }
-        if (last_pre_raster) {
-            const auto& fragment_info{programs[5].info};
-            for (size_t index = 0; index < 32; ++index) {
-                if (fragment_info.interpolation[index] == Shader::Interpolation::NoPerspective) {
-                    info.noperspective_outputs.set(index);
-                }
-            }
-        }
-    }
     return info;
 }
 
@@ -4168,9 +4141,9 @@ std::string PipelineCache::KeptStamp(const std::string& prepared_stamp) const {
     // found by). Not the exe nor the EDEN_NX2_ switches (2026-11-09, owner: every dev build and
     // every test switch prepared again): whether this build and its switches translate the
     // kept pipelines the same is checked at boot on a sample of them (CheckKeptSample).
-    // NX2KEPT3: the SPIR-V emitter changed under kept modules (zortos293/Lichii#902 clip
-    // distances, #820 noperspective varyings), which the sample only sees if it hits one.
-    return fmt::format("{}kept NX2KEPT3 cache {} settings {:#x} gpl {} oot {} {:016x} canonical "
+    // NX2KEPT4: the SPIR-V emitter changed under kept modules (zortos293/Lichii#902 clip
+    // distances; #820 noperspective varyings, then its revert), which the sample only sees if it hits one.
+    return fmt::format("{}kept NX2KEPT4 cache {} settings {:#x} gpl {} oot {} {:016x} canonical "
                        "{}\n",
                        prepared_stamp, CACHE_VERSION, SpirvSettingsStamp(),
                        device.IsExtGraphicsPipelineLibrarySupported() ? 1 : 0,
