@@ -712,6 +712,9 @@ private:
     ::Common::unordered_set<ImageId> cold_watch_set;
     u64 cold_deleted{};       ///< Since the last report
     u64 cold_kept_guarded{};  ///< Dropped from the watch: GPU-written and guarded
+    u64 cold_superseded{};    ///< EXP58: guarded but superseded and old, deleted
+    /// EXP58: whether a newer render target of another shape covers this image's memory.
+    [[nodiscard]] bool ColdSuperseded(ImageId image_id, const ImageBase& image);
     u64 cold_kept_read{};     ///< Dropped from the watch: GPU-written and read later or by the CPU
 
     [[nodiscard]] static bool RelocationShaped(const ImageInfo& info) noexcept {

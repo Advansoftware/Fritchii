@@ -823,6 +823,25 @@ void TextureCache<P>::WatchColdImage(ImageId image_id) {
 }
 
 template <class P>
+bool TextureCache<P>::ColdSuperseded(ImageId image_id, const ImageBase& image) {
+    const u64 shape = RelocationShapeKey(image.info);
+    const u64 touched = lru_cache.Tick(image.lru_index);
+    bool superseded = false;
+    ForEachImageInRegion(image.cpu_addr, image.guest_size_bytes,
+                         [&](ImageId other_id, Image& other) {
+                             if (other_id == image_id ||
+                                 False(other.flags & ImageFlagBits::Registered) ||
+                                 RelocationShapeKey(other.info) == shape ||
+                                 lru_cache.Tick(other.lru_index) <= touched) {
+                                 return false;
+                             }
+                             superseded = true;
+                             return true;
+                         });
+    return superseded;
+}
+
+template <class P>
 void TextureCache<P>::SweepColdImages() {
     const u64 cold_frames = TcColdFrames();
     if (cold_frames == 0) {
@@ -885,6 +904,7 @@ void TextureCache<P>::SweepColdImages() {
             ++index;
             continue;
         }
+        bool superseded = false; // EXP58 chose it
         if (True(image.flags & ImageFlagBits::GpuModified)) {
             // Its contents exist only on the GPU and the collector would not download them
             // either (BadOverlap): only where nothing says they may be read again.
@@ -898,9 +918,29 @@ void TextureCache<P>::SweepColdImages() {
             const u8 guard = shape != relocation_shapes.end() ? shape->second.guard : 0;
             if ((guard & GuardCpuRead) != 0 ||
                 (!sweep_guarded && (guard & (GuardSampled | GuardLoaded)) != 0)) {
-                ++cold_kept_guarded;
-                drop();
-                continue;
+                // EDEN_NX2_EXP58 (live, 0 = off; fable52_answer_2 3.3 step 4): a guarded image
+                // still dies once it has been untouched for SupersededFrames and a render target
+                // of another shape, touched since, covers its memory: the game reused that memory
+                // for another layout, so the old contents have no reader left. Deleted without a
+                // download, as the collector would. The guard was made for relocation (same
+                // shape, live contents); these piled up (350k "kept" in 600 frames) until the
+                // collector's bursts. Never for shapes the CPU read.
+                constexpr u64 SupersededFrames = 60;
+                const bool superseded_sweep =
+                    VideoCore::Nx2Debug::Experiment(58) != 0 && (guard & GuardCpuRead) == 0;
+                const u64 age = frame_tick - lru_cache.Tick(image.lru_index);
+                if (superseded_sweep && age < SupersededFrames &&
+                    frame_tick - watched_at <= MaxWatchFrames) {
+                    ++index; // looked at again when old enough
+                    continue;
+                }
+                if (!superseded_sweep || age < SupersededFrames ||
+                    !ColdSuperseded(image_id, image)) {
+                    ++cold_kept_guarded;
+                    drop();
+                    continue;
+                }
+                superseded = true;
             }
         }
         if (queued(image_id, uncommitted_downloads) ||
@@ -921,18 +961,20 @@ void TextureCache<P>::SweepColdImages() {
         UnregisterImage(image_id);
         DeleteImage(image_id);
         ++deleted;
+        cold_superseded += superseded ? 1 : 0;
         drop();
     }
     cold_deleted += deleted;
     if (frame_tick % 600 == 0) {
         LOG_INFO(HW_GPU,
                  "Cold sweep (EDEN_NX2_TC_COLD_FRAMES={}{}) last 600 frames: {} chain images "
-                 "deleted, {} kept as GPU-written and guarded, {} kept as read later; {} watched; "
-                 "{} images, device memory {} MiB (expected {} MiB)",
-                 cold_frames, sweep_guarded ? ", guarded too" : "", cold_deleted,
+                 "deleted ({} of them guarded but superseded, EXP58), {} kept as GPU-written and "
+                 "guarded, {} kept as read later; {} watched; {} images, device memory {} MiB "
+                 "(expected {} MiB)",
+                 cold_frames, sweep_guarded ? ", guarded too" : "", cold_deleted, cold_superseded,
                  cold_kept_guarded, cold_kept_read, cold_watch.size(), slot_images.size(),
                  total_used_memory >> 20, expected_memory >> 20);
-        cold_deleted = cold_kept_guarded = cold_kept_read = 0;
+        cold_deleted = cold_kept_guarded = cold_kept_read = cold_superseded = 0;
     }
 }
 
