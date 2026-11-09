@@ -264,8 +264,16 @@ void Export(QWidget* parent, const std::vector<VkDeviceInfo::Record>& vk_device_
 
     const QString log_dir = QString::fromStdString(
         Common::FS::PathToUTF8String(Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir)));
-    const QString current_path = QDir(log_dir).filePath(QStringLiteral(LOG_FILE));
-    const QString previous_path = current_path + QStringLiteral(".old.txt");
+    const QString usual_path = QDir(log_dir).filePath(QStringLiteral(LOG_FILE));
+    const QString previous_path = usual_path + QStringLiteral(".old.txt");
+    // The file this session really writes: another Fritchii that never finished closing keeps
+    // the usual one locked, and that one then holds the stuck process's old log.
+    bool usual_locked = false;
+    const auto session_file = Common::Log::FilePath(&usual_locked);
+    const QString current_path =
+        session_file.empty()
+            ? usual_path
+            : QString::fromStdString(Common::FS::PathToUTF8String(session_file));
 
     const Scrubber scrubber;
     QStringList included;
@@ -281,8 +289,16 @@ void Export(QWidget* parent, const std::vector<VkDeviceInfo::Record>& vk_device_
     };
     add_log(current_path, QStringLiteral("log-this-session.txt"),
             QObject::tr("the log of this session"));
-    add_log(previous_path, QStringLiteral("log-previous-session.txt"),
-            QObject::tr("the log of the session before"));
+    if (usual_locked) {
+        add_log(usual_path, QStringLiteral("log-stuck-process.txt"),
+                QObject::tr("the log of a Fritchii that was still running when this one started"));
+        included << QStringLiteral(
+            "WARNING: another lichii.exe was still running when this session started. End it in "
+            "Task Manager (or restart the PC), then start Fritchii again.");
+    } else {
+        add_log(previous_path, QStringLiteral("log-previous-session.txt"),
+                QObject::tr("the log of the session before"));
+    }
     included.prepend(QStringLiteral("system-info.txt: this summary"));
     files.emplace(files.begin(), QStringLiteral("system-info.txt"),
                   scrubber.Apply(SystemSummary(vk_device_records, included)).toUtf8());
