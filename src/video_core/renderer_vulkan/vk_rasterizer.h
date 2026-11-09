@@ -262,6 +262,11 @@ private:
     void FrameDumpPass(const Framebuffer* framebuffer);
     bool OcarinaTemporalEnabled() const;
     void TrackOcarinaCamera();
+    /// Offsets the viewport of Ocarina's scene draws (depth-tested, into the scene depth) by a
+    /// sub-pixel amount that changes every frame while FSR replaces the game's upscale, so FSR
+    /// gets new sample positions each frame (the game renders without jitter). The offset goes to
+    /// FSR with the frame.
+    void UpdateOcarinaJitter();
     void TrackOcarinaActor(u64 shader_hash, bool is_indexed, bool is_indirect);
     bool TryOcarinaUpscale(const ComputePipeline& pipeline, bool replace);
     void ReadOcarinaActor(struct OcarinaActorMesh& mesh);
@@ -320,6 +325,10 @@ private:
     const char* oot_fallback_reason{};
     u32 oot_fallback_repeats{};
     std::optional<u64> oot_dlss_frame;
+    std::array<f32, 2> oot_jitter_applied{}; ///< in the viewport state now (render pixels)
+    std::array<f32, 2> oot_jitter_offset{};  ///< what oot_jitter_frame's scene draws used
+    std::optional<u64> oot_jitter_frame;
+    u32 oot_jitter_phases{8}; ///< Halton sequence length for the last FSR frame's scale
     std::optional<u64> oot_4k_scene_frame;
     VkImage oot_4k_guest_present{};
     std::optional<u64> oot_effects_frame;

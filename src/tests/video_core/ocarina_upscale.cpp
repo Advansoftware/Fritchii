@@ -25,6 +25,21 @@ TEST_CASE("OoT temporal backend selection is opt-in and vendor neutral", "[video
     CHECK(SelectOcarinaUpscaler(false, false, false, "garbage") == Native);
 }
 
+TEST_CASE("OoT FSR texture LOD bias follows the upscaler, the console mode and failure",
+          "[video_core][ocarina]") {
+    using enum VideoCommon::OcarinaUpscaleBackend;
+    using VideoCommon::KeepOcarinaFsrLodBias;
+    using VideoCommon::OcarinaFsrLodBias;
+    CHECK(OcarinaFsrLodBias(Fsr) == -1.58f);
+    CHECK(OcarinaFsrLodBias(Dlss) == 0.0f);
+    CHECK(OcarinaFsrLodBias(Native) == 0.0f);
+    CHECK(KeepOcarinaFsrLodBias(true, false, false));
+    CHECK_FALSE(KeepOcarinaFsrLodBias(false, false, false));
+    CHECK_FALSE(KeepOcarinaFsrLodBias(true, false, true));
+    CHECK_FALSE(KeepOcarinaFsrLodBias(true, true, false));
+    CHECK_FALSE(KeepOcarinaFsrLodBias(true, true, true));
+}
+
 TEST_CASE("FSR temporal sharpness uses the existing stops slider", "[video_core][fsr][ocarina]") {
     CHECK(FSR::RcasSharpnessFromStops(0.0f) == 1.0f);
     CHECK(FSR::RcasSharpnessFromStops(0.81f) == 0.595f);

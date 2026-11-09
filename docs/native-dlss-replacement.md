@@ -66,10 +66,25 @@ the game keeps its own pass whenever DLSS is off, unavailable or fails to start.
   Its shaders use `HDR_COLOR_INPUT=0` and `INVERTED_DEPTH=0`. Camera reconstruction alone
   converts the stored [0,1] depth to GL [-1,1] clip coordinates. Motion is previous minus
   current in render pixels, with screen-down Y, so FSR's scale is `(1,1)` before normalization.
-- Jitter is zero: the game has no subpixel sample sequence. Adding host jitter only to the
-  upscaler cannot recover detail and corrupts reprojection. Safe host jitter would require
-  changing the raster projection plus unjittered motion/depth handling (cf. #253), out of scope.
-  Consequently this is temporal stabilization/upscaling, not full jittered supersampling.
+- Jitter (FSR only, on by default): the game has no subpixel sample sequence, so the host adds
+  one. While FSR replaced the previous frame's upscale, every draw that depth-tests against the
+  scene depth at the scene size has its viewport offset by a Halton (2,3) sub-pixel amount
+  (AMD's phase count, 8 x (output / render width)^2: 18 for 1440p -> 4K, 8 for native AA), and
+  FSR gets the same offset as the frame's jitter. Shadow maps, half-size passes, full-screen
+  passes and frames the game upscales itself are not offset. A full-screen pass with depth
+  writes on but the test off writes no depth (Vulkan disables writes with the test), so the
+  depth-write flag alone doesn't count. DLSS gets no jitter.
+- Motion with jitter: FSR is told the motion vectors carry no jitter (no jitter-cancellation
+  flag). Camera motion comes from the unjittered matrices, reconstructed at each depth sample's
+  unjittered position (the pixel centre minus the jitter). The replay of Link's skinned draw is
+  offset by the same jitter, so its scene-depth check compares the same samples the game drew,
+  and its motion is taken from the unjittered position. Without that offset the jitter made the
+  check fail on most of the fragments it otherwise accepts.
+- Texture LOD bias (FSR only): when the session's upscaler is FSR, mipmapped samplers get
+  AMD's recommended bias log2(render / output) - 1 = -1.58 in docked mode (none in handheld).
+  Samplers pick the biased or unbiased variant at each bind, so a console mode switch takes
+  effect in-session. Images the GPU wrote (render targets: bloom, blur, reflections, fog) keep
+  the game's own bias.
 - #644 (`82494c4820`, `74a2d20c90`, `4352c06bbf`) supplies the effects capture, used by FSR only
   (DLSS gets no bias mask and runs as before). FSR uses its R16F current/history bias as both
   reactive and transparency/composition masks; missing capture uses zero masks, not stale
