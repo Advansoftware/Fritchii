@@ -32,6 +32,7 @@
 #endif
 
 #include "main_window.h"
+#include "fritchii/fritchii_ui.h"
 #ifdef ENABLE_UPDATE_CHECKER
 #include "updater/update_dialog.h"
 #endif
@@ -270,7 +271,12 @@ int main(int argc, char* argv[]) {
     QGuiApplication::setDesktopFileName(QStringLiteral("io.github.zortos293.lichii"));
 #endif
 
-    auto rounding_policy = GetHighDpiRoundingPolicy();
+    // Fritchii: Windows' own scale, as set (125%, 150%, 175%). The rounding turned 150% on a 4K
+    // screen into 200% (windows bigger than asked, dialogs cut off) and 125% into 100% (tiny
+    // text). Qt 6 draws fractional scales without the old artifacts.
+    auto rounding_policy = FritchiiUi::Enabled()
+                               ? Qt::HighDpiScaleFactorRoundingPolicy::PassThrough
+                               : GetHighDpiRoundingPolicy();
     QApplication::setHighDpiScaleFactorRoundingPolicy(rounding_policy);
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)

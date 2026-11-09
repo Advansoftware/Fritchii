@@ -4,6 +4,8 @@
 
 #include <algorithm>
 
+#include <QScreen>
+#include <QGuiApplication>
 #include <QDialog>
 #include <QFile>
 #include <QHBoxLayout>
@@ -114,7 +116,10 @@ void MarkWhatsNewSeen() {
 void ShowWhatsNew(QWidget* parent) {
     QDialog dialog(parent);
     dialog.setWindowTitle(QObject::tr("What's New"));
-    dialog.resize(660, 640);
+    // Never taller or wider than the screen: at 175% a 1080p screen is ~600 units tall.
+    const QRect screen = (parent ? parent->screen() : QGuiApplication::primaryScreen())
+                             ->availableGeometry();
+    dialog.resize(std::min(660, screen.width() * 9 / 10), std::min(640, screen.height() * 85 / 100));
 
     auto* layout = new QVBoxLayout(&dialog);
     layout->setContentsMargins(36, 30, 36, 24);
