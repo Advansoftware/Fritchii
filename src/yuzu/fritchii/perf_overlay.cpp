@@ -16,6 +16,11 @@
 #include "core/perf_stats.h"
 #include "yuzu/main_window.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#include <psapi.h>
+#endif
+
 namespace FritchiiUi {
 namespace {
 
@@ -25,7 +30,8 @@ constexpr double GapFps = 10.0;
 // "low" is the lowest of the most recent samples (about half a minute).
 constexpr size_t LowSamples = 30;
 constexpr int Width = 272;
-constexpr int Height = 158;
+constexpr int Height = 184;
+constexpr int RamRowTop = 66;
 constexpr int Pad = 18;
 constexpr int GraphHeight = 54;
 
@@ -76,6 +82,18 @@ void PerfOverlay::OnStats(const Core::PerfStatsResults& results) {
     if (!std::isnan(results.frametime)) {
         frametime_ms = results.frametime * 1000.0;
     }
+#ifdef _WIN32
+    constexpr double GiB = 1024.0 * 1024.0 * 1024.0;
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) {
+        ram_used_gb = static_cast<double>(counters.WorkingSetSize) / GiB;
+    }
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status)) {
+        ram_free_gb = static_cast<double>(status.ullAvailPhys) / GiB;
+    }
+#endif
     update();
 }
 
@@ -120,6 +138,28 @@ void PerfOverlay::paintEvent(QPaintEvent*) {
     painter.setPen(Muted);
     painter.drawText(QRect(right - 140, Pad + 26, 140, 20), Qt::AlignRight | Qt::AlignVCenter,
                      low_text);
+
+    // RAM: Fritchii's, then what the PC has left. Amber when the PC is nearly out (it starts
+    // paging, which shows as stutter).
+    if (ram_used_gb >= 0) {
+        const QString used_text = tr("%1 GB").arg(ram_used_gb, 0, 'f', 1);
+        painter.setFont(value);
+        painter.setPen(Text);
+        painter.drawText(QRect(Pad, RamRowTop, 120, 22), Qt::AlignLeft | Qt::AlignVCenter,
+                         used_text);
+        const int used_width = QFontMetrics(value).horizontalAdvance(used_text);
+        painter.setFont(label);
+        painter.setPen(Muted);
+        painter.drawText(QRect(Pad + used_width + 6, RamRowTop, 60, 22),
+                         Qt::AlignLeft | Qt::AlignVCenter, tr("RAM"));
+        if (ram_free_gb >= 0) {
+            const QColor Warn{0xf5, 0xb0, 0x4b};
+            painter.setPen(ram_free_gb < 2.0 ? Warn : Muted);
+            painter.drawText(QRect(right - 140, RamRowTop, 140, 22),
+                             Qt::AlignRight | Qt::AlignVCenter,
+                             tr("%1 GB free").arg(ram_free_gb, 0, 'f', 1));
+        }
+    }
 
     // The line: the last samples against the target frame rate.
     const QRectF graph(Pad, Height - Pad - GraphHeight, Width - 2 * Pad, GraphHeight);
