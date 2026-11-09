@@ -1188,12 +1188,20 @@ namespace {
 std::atomic<u64> g_zero_filled_bytes{};
 
 [[maybe_unused]] bool IsZeroPage(const u8* page) {
+    // Stops at the first non-zero line. Read whole, the ~6 GB of resident guest pages took
+    // 1.35-1.47 s a pass (fable52_answer_1), and most pages hold data in their first bytes.
     const auto* words = reinterpret_cast<const u64*>(page);
-    u64 bits = 0;
-    for (size_t i = 0; i < PageAlignment / sizeof(u64); ++i) {
-        bits |= words[i];
+    constexpr size_t LineWords = 8; // 64 bytes
+    for (size_t i = 0; i < PageAlignment / sizeof(u64); i += LineWords) {
+        u64 bits = 0;
+        for (size_t j = 0; j < LineWords; ++j) {
+            bits |= words[i + j];
+        }
+        if (bits != 0) {
+            return false;
+        }
     }
-    return bits == 0;
+    return true;
 }
 } // namespace
 
