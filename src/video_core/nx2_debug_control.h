@@ -328,6 +328,16 @@ inline std::atomic<int> g_idle_pause{-1};
 /// nor for rescaled, sparse, converted or CPU-read images, ones with a download queued, bound as
 /// another target of the clear or in another channel. Logs each shape's first candidate and
 /// relocation and "Render target relocation (EXP43=n) last 600 frames".
+/// EXP51 (live; RAM, fable_answer_26 C2c; Vulkan PipelineCache::EvictUnusedComputePipelines):
+/// compute pipelines unused for 9000 frames are destroyed, least recently used first, while more
+/// than 500 are held (checked every 600 frames). Their next dispatch translates them again on the
+/// GPU thread, binding the pointers they bound, and builds them from the driver's pipeline cache
+/// (no new disk cache record). 1 = only programs dispatched this session, 2 = also boot builds no
+/// dispatch used yet. Never one still building or with a rebuild pending; destroyed through
+/// retired_compute_pipelines once the GPU and their worker build are done. Off by default, not
+/// measured yet: compare the 10 s memory line's compute count and the working set over a long
+/// session, and the "Evicted N compute pipelines" log's "dispatched again" count (each is a
+/// GPU-thread rebuild, a possible hitch).
 inline constexpr int ExperimentCount = 64;
 inline std::atomic<int> g_experiments[ExperimentCount]{};
 

@@ -1211,13 +1211,30 @@ size_t BackgroundPipelineThreads() {
     return std::clamp<size_t>(std::thread::hardware_concurrency() / 4, 1, 6);
 }
 
-/// Built graphics pipelines past which EvictUnusedPipelines destroys unused ones
-/// (EDEN_NX2_PIPELINE_EVICT_ABOVE, default 8,000: ~3.6 GB of driver memory at most).
+/// Built graphics pipelines past which EvictUnusedPipelines destroys unused ones. By default a
+/// sixteenth of the RAM at ~0.45 MB of driver memory each, as BackgroundPipelineLimit (16 GB:
+/// ~2,280, 32 GB: ~4,560), at least 2,000 and at most 8,000 (the fixed default before, ~3.6 GB).
+/// Ocarina of Time held 3,657 built 6 minutes in and its working set reached ~17.5 GB after an
+/// hour on a 32 GB PC with the fixed 8,000. EDEN_NX2_PIPELINE_EVICT_ABOVE sets it (any value).
 size_t EvictAbovePipelines() {
     static const size_t evict_above = [] {
-        const char* value = std::getenv("EDEN_NX2_PIPELINE_EVICT_ABOVE");
-        return value != nullptr ? static_cast<size_t>(std::strtoull(value, nullptr, 10))
-                                : size_t{8000};
+        if (const char* value = std::getenv("EDEN_NX2_PIPELINE_EVICT_ABOVE")) {
+            const size_t set = static_cast<size_t>(std::strtoull(value, nullptr, 10));
+            LOG_INFO(Render_Vulkan,
+                     "Graphics pipelines are evicted past {} (EDEN_NX2_PIPELINE_EVICT_ABOVE)", set);
+            return set;
+        }
+        constexpr u64 PipelineBytes = u64{460} << 10;
+        constexpr size_t MinPipelines = 2000;
+        constexpr size_t MaxPipelines = 8000;
+        const u64 ram = Common::GetMemInfo().TotalPhysicalMemory;
+        const size_t by_ram = static_cast<size_t>(ram / 16 / PipelineBytes);
+        const size_t chosen = std::clamp<size_t>(by_ram, MinPipelines, MaxPipelines);
+        LOG_INFO(Render_Vulkan,
+                 "Graphics pipelines are evicted past {} ({} MB of RAM; "
+                 "EDEN_NX2_PIPELINE_EVICT_ABOVE sets it)",
+                 chosen, ram >> 20);
+        return chosen;
     }();
     return evict_above;
 }
@@ -2327,7 +2344,17 @@ ComputePipeline* PipelineCache::CurrentComputePipeline() {
     const auto [pair, is_new]{compute_cache.try_emplace(key)};
     auto& entry{pair->second};
     if (is_new) {
-        entry = CreateComputePipeline(key, shader);
+        if (const auto evicted = evicted_compute.find(key); evicted != evicted_compute.end()) {
+            // EXP51 evicted it: translated binding the pointers it bound, from the driver's
+            // pipeline cache; its disk cache records are there already.
+            const EvictedCompute learned{std::move(evicted->second)};
+            evicted_compute.erase(evicted);
+            entry = CreateComputePipeline(key, shader, learned.mapped_pointers, false);
+            entry.rebuilds = (std::max)(entry.rebuilds, learned.rebuilds);
+            ++compute_rebuilt_after_evict;
+        } else {
+            entry = CreateComputePipeline(key, shader);
+        }
     } else if (entry.pending) {
         // A rebuild (below) compiles on a worker; switch once it is built (zortos293/Lichii#969:
         // the next dispatch used to wait for it, up to 2.8 s in Ocarina of Time).
@@ -2381,6 +2408,8 @@ ComputePipeline* PipelineCache::CurrentComputePipeline() {
             entry.rebuilds = MaxComputeRebuilds;
         }
     }
+    entry.last_use_frame = frame_count;
+    entry.dispatched = true;
     return entry.Get(kepler_compute->IsNativeMode(),
                      kepler_compute->regs.code_loc.Address() + qmd.program_start, key);
 }
@@ -2389,6 +2418,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
                                       const VideoCore::DiskResourceLoadCallback& callback) {
     // Read here, after nx2_switches.txt, and kept for the draws' lookups.
     canonical_keys = CanonicalKeys();
+    static_cast<void>(EvictAbovePipelines()); // Chosen and logged at boot
     visual_workaround_title = title_id;
     if (title_id == 0) {
         return;
@@ -5368,6 +5398,9 @@ void PipelineCache::TickFrame() {
     constexpr u64 EvictCheckFrames = 600;
     if (frame_count % EvictCheckFrames == 0) {
         EvictUnusedPipelines();
+        if (const int mode = VideoCore::Nx2Debug::Experiment(51); mode != 0) {
+            EvictUnusedComputePipelines(mode);
+        }
         if (VideoCore::Nx2Debug::Experiment(23) == 1 &&
             device.IsExtGraphicsPipelineLibrarySupported()) {
             // EXP23 (off by default, unmeasured): a library goes unused once every pipeline
@@ -5439,8 +5472,9 @@ void PipelineCache::EvictUnusedPipelines() {
     }
     // Only while the cache is large: each one evicted is translated again on the GPU thread when
     // its place is revisited (~10 ms). Ocarina of Time kept ~1,900 of them and evicted 3,400 in
-    // 25 minutes of play, then rebuilt 1,850 (14 s of stalls, 3.8 s in one 10 s window). 8,000
-    // pipelines are ~3.6 GB of driver memory at most. EDEN_NX2_PIPELINE_EVICT_ABOVE sets it.
+    // 25 minutes of play, then rebuilt 1,850 (14 s of stalls, 3.8 s in one 10 s window). The
+    // threshold scales with the RAM (EvictAbovePipelines: 32 GB ~4,560, ~2 GB of driver memory).
+    // EDEN_NX2_PIPELINE_EVICT_ABOVE sets it.
     // Past it only the excess goes, least recently used first (from zortos293/Lichii#408), so
     // crossing it doesn't drop every stale pipeline at once.
     const size_t evict_above = EvictAbovePipelines();
@@ -5489,6 +5523,60 @@ void PipelineCache::EvictUnusedPipelines() {
     }
     LOG_INFO(Render_Vulkan, "Evicted {} graphics pipelines unused for {} frames, {} left", evicted,
              EvictAfterFrames, graphics_cache.size());
+}
+
+void PipelineCache::EvictUnusedComputePipelines(int mode) {
+    // As EvictUnusedPipelines: not on MoltenVK (a Metal compile per rebuild), nor when every
+    // cached pipeline was asked for.
+    if (device.IsMoltenVK() || PreloadAllPipelines()) {
+        return;
+    }
+    // EXP51 (live, off by default): compute pipelines were never destroyed (Ocarina of Time: 1,803
+    // 6 minutes in, beside 3,657 graphics). One unused this long goes, least recently used first,
+    // while more than MinKept are held; its next dispatch translates it again on the GPU thread
+    // and builds it from the driver's pipeline cache. 1 = only programs dispatched this session,
+    // 2 = also boot builds no dispatch used yet (dropped once the session is that old).
+    constexpr u64 EvictAfterFrames = 9000;
+    constexpr size_t MinKept = 500;
+    if (frame_count <= EvictAfterFrames || compute_cache.size() <= MinKept) {
+        return;
+    }
+    const u64 cutoff = frame_count - EvictAfterFrames;
+    std::vector<std::pair<u64, ComputePipelineCacheKey>> candidates;
+    for (const auto& [key, entry] : compute_cache) {
+        // A rebuild in flight (pending) is left to finish; an entry without a pipeline is a
+        // failure record, which keeps a native program from being retried every dispatch.
+        if (entry.pipeline == nullptr || entry.pending != nullptr || !entry.pipeline->IsBuilt() ||
+            entry.pipeline->BuildFailed() || entry.last_use_frame >= cutoff ||
+            (!entry.dispatched && mode < 2)) {
+            continue;
+        }
+        candidates.emplace_back(entry.last_use_frame, key);
+    }
+    const size_t evicted =
+        VideoCommon::GraphicsPipelinesToEvict(compute_cache.size(), candidates.size(), MinKept);
+    if (evicted == 0) {
+        return;
+    }
+    std::nth_element(candidates.begin(), candidates.begin() + (evicted - 1), candidates.end(),
+                     [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
+    // Destroyed once the GPU is done with them and no build of theirs is queued on a worker
+    // (TickFrame frees retired_compute_pipelines from the front).
+    const u64 tick = scheduler.CurrentTick();
+    for (size_t i = 0; i < evicted; ++i) {
+        const auto it = compute_cache.find(candidates[i].second);
+        ComputePipelineCacheEntry& entry = it->second;
+        evicted_compute.insert_or_assign(
+            it->first, EvictedCompute{std::move(entry.mapped_pointers), entry.rebuilds});
+        retired_compute_pipelines.emplace_back(tick, std::move(entry.pipeline));
+        compute_cache.erase(it);
+    }
+    compute_evicted_total += evicted;
+    LOG_INFO(Render_Vulkan,
+             "Evicted {} compute pipelines unused for {} frames (EXP51={}), {} left; this "
+             "session {} evicted, {} of those dispatched again",
+             evicted, EvictAfterFrames, mode, compute_cache.size(), compute_evicted_total,
+             compute_rebuilt_after_evict);
 }
 
 std::unique_ptr<GraphicsPipeline> PipelineCache::TakeBackgroundPipeline(
@@ -6737,7 +6825,8 @@ void PipelineCache::TickTranslations() {
 
 ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(const ComputePipelineCacheKey& key,
                                                                const ShaderInfo* shader,
-                                                               std::span<const u64> keep_pointers) {
+                                                               std::span<const u64> keep_pointers,
+                                                               bool store) {
     const auto begin = std::chrono::steady_clock::now();
     SCOPE_EXIT {
         ReportRuntimePipeline("Compute", begin,
@@ -6772,7 +6861,7 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(const ComputePipe
                      path.string(), file.good());
         }
     }
-    if (!entry.pipeline || pipeline_cache_filename.empty()) {
+    if (!entry.pipeline || pipeline_cache_filename.empty() || !store) {
         return entry;
     }
     serialization_thread.QueueWork([this, key, env_ = std::move(env)] {
