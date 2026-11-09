@@ -68,6 +68,10 @@ struct BuiltinPatch {
     /// When set, this environment variable at 1 skips the patch and at 0 applies it even when
     /// Add-Ons has it off (A/B runs without touching the player's Add-Ons).
     const char* disable_env = nullptr;
+    /// When set, the patch applies (and is listed in Add-Ons) only while this returns true.
+    bool (*setting_enabled)() = nullptr;
+    /// Another built-in this one contains: skipped once this one is applied.
+    std::string_view replaces{};
 };
 
 // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
@@ -100,6 +104,61 @@ constexpr std::array DYNAMIC_FPS_RECORDS{
     BuiltinPatchRecord{.module_offset = 0x6E6CC4, .bytes = DYNAMIC_FPS_CALL},
     BuiltinPatchRecord{.module_offset = 0x3C46200, .bytes = DYNAMIC_FPS_ROUTINE},
 };
+
+// High refresh rate (experimental, Settings oot_high_refresh): Dark's routine with the tail of
+// zortos293/Lichii#655 ("FPS Unlock", by atk3001): the smoothed real-time step is always
+// returned, also below 1.0, so the game keeps real speed above 60 fps (0.5 a frame at 120).
+// Through the fmul at +0x58 it is Dark's routine byte for byte (the 50 ms delta cap included;
+// #655 raised it to 100 ms). The tail clamps the step to [0.02, 3.0] (3.0 = that cap; #655: 6.0) and multiplies it
+// by a speed scale word that the present pacing sets from the speed limit (Turbo, Slow; 1.0 at
+// 100%), since pacing alone no longer changes the game's speed. The first call (no earlier
+// tick) still returns the game's own step from +0x70 (the head's cbz target).
+//   +0x5C ldr s3, +0x80 ; fmaxnm s2, s2, s3 ; ldr s3, +0x84 ; fminnm s2, s2, s3 ; b +0x74
+//   +0x70 ret
+//   +0x74 ldr s3, +0x88 ; fmul s8, s2, s3 ; ret
+//   +0x80 0.02f ; 3.0f ; speed scale (1.0f)
+constexpr std::array<u8, 140> HIGH_REFRESH_ROUTINE{
+    0x28, 0x18, 0x20, 0x1E, 0xCA, 0x92, 0x00, 0xB0, 0x4A, 0x01, 0x38, 0x91,
+    0x2B, 0xE0, 0x3B, 0xD5, 0x4C, 0x01, 0x40, 0xF9, 0x4B, 0x01, 0x00, 0xF9,
+    0xCC, 0x02, 0x00, 0xB4, 0x6B, 0x01, 0x0C, 0xCB, 0x0D, 0xE0, 0x3B, 0xD5,
+    0x8E, 0x02, 0x80, 0xD2, 0xAE, 0x09, 0xCE, 0x9A, 0x7F, 0x01, 0x0E, 0xEB,
+    0xCB, 0x81, 0x8B, 0x9A, 0x4C, 0x05, 0x40, 0xF9, 0x4C, 0x00, 0x00, 0xB5,
+    0xEC, 0x03, 0x0B, 0xAA, 0x6E, 0x01, 0x0C, 0xCB, 0x8C, 0x0D, 0x8E, 0x8B,
+    0x4C, 0x05, 0x00, 0xF9, 0x82, 0x01, 0x23, 0x9E, 0xA3, 0x01, 0x23, 0x9E,
+    0x42, 0x18, 0x23, 0x1E, 0x42, 0x08, 0x21, 0x1E, 0x23, 0x01, 0x00, 0x1C,
+    0x42, 0x68, 0x23, 0x1E, 0x03, 0x01, 0x00, 0x1C, 0x42, 0x78, 0x23, 0x1E,
+    0x02, 0x00, 0x00, 0x14, 0xC0, 0x03, 0x5F, 0xD6, 0xA3, 0x00, 0x00, 0x1C,
+    0x48, 0x08, 0x23, 0x1E, 0xC0, 0x03, 0x5F, 0xD6, 0x0A, 0xD7, 0xA3, 0x3C,
+    0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x80, 0x3F,
+};
+constexpr size_t HIGH_REFRESH_ROUTINE_OFFSET = 0x3C46200;
+constexpr size_t HIGH_REFRESH_SCALE = 0x88; // the speed scale word, in the routine
+// The routine runs 20 bytes past Dark's 120: those words must be free (zero) in the module.
+constexpr std::span<const u8> HighRefreshWord(size_t offset) {
+    return std::span<const u8>{HIGH_REFRESH_ROUTINE}.subspan(offset, 4);
+}
+constexpr std::array HIGH_REFRESH_RECORDS{
+    BuiltinPatchRecord{.module_offset = 0x6E6CC4, .bytes = DYNAMIC_FPS_CALL},
+    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET,
+                       .bytes = std::span<const u8>{HIGH_REFRESH_ROUTINE}.first(120)},
+    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + 0x78,
+                       .bytes = HighRefreshWord(0x78), .checked = true, .original = 0},
+    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + 0x7C,
+                       .bytes = HighRefreshWord(0x7C), .checked = true, .original = 0},
+    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + 0x80,
+                       .bytes = HighRefreshWord(0x80), .checked = true, .original = 0},
+    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + 0x84,
+                       .bytes = HighRefreshWord(0x84), .checked = true, .original = 0},
+    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + HIGH_REFRESH_SCALE,
+                       .bytes = HighRefreshWord(HIGH_REFRESH_SCALE), .checked = true,
+                       .original = 0},
+};
+constexpr std::string_view DYNAMIC_FPS_NAME = "Dynamic FPS by Dark (built-in)";
+constexpr std::string_view HIGH_REFRESH_NAME = "High refresh rate (built-in, experimental)";
+
+bool HighRefreshSettingOn() {
+    return Settings::values.oot_high_refresh.GetValue();
+}
 
 // Occlusion Off (cLohan's community patch, from zortos293/Lichii#641): the game creates no
 // z-prepass occlusion queries and no samples-passed queries (ldrb w8, [x0] -> mov w8, wzr), so it
@@ -140,8 +199,19 @@ constexpr std::array BUILTIN_PATCHES{
         .records = MAX_RESOLUTION_RECORDS,
         .disable_env = "EDEN_NX2_NO_MAX_RES",
     },
+    // Before Dark's: it contains his routine and replaces it while applied. Off by default; only
+    // listed in Add-Ons while the setting is on.
     BuiltinPatch{
-        .name = "Dynamic FPS by Dark (built-in)",
+        .name = HIGH_REFRESH_NAME,
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = HIGH_REFRESH_RECORDS,
+        .setting_enabled = &HighRefreshSettingOn,
+        .replaces = DYNAMIC_FPS_NAME,
+    },
+    BuiltinPatch{
+        .name = DYNAMIC_FPS_NAME,
         .title_id = 0x0400486024DEC000,
         .module = "main",
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
@@ -584,6 +654,7 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
     }
 
     const auto disabled = GetDisabledAddons();
+    std::vector<std::string_view> replaced;
     for (const auto& patch : BUILTIN_PATCHES) {
         if (patch.title_id != title_id || patch.module != name) {
             continue;
@@ -593,6 +664,14 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
             if (value == nullptr || std::string_view{value} != "1") {
                 continue;
             }
+        }
+        if (patch.setting_enabled != nullptr && !patch.setting_enabled()) {
+            continue;
+        }
+        if (std::find(replaced.cbegin(), replaced.cend(), patch.name) != replaced.cend()) {
+            LOG_INFO(Loader, "    - Skipping \"{}\": included in an applied built-in patch",
+                     patch.name);
+            continue;
         }
         // disable_env=1 skips the patch, =0 applies it even when Add-Ons has it off (A/B runs).
         const char* const ab_value = patch.disable_env ? std::getenv(patch.disable_env) : nullptr;
@@ -653,6 +732,9 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         }
         LOG_INFO(Loader, "    - Applying built-in patch \"{}\" ({} records) to {}", patch.name,
                  patch.records.size(), name);
+        if (!patch.replaces.empty()) {
+            replaced.push_back(patch.replaces);
+        }
     }
 
     if (out.size() < sizeof(Loader::NSOHeader)) {
@@ -1214,7 +1296,8 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
         if (patch.title_id != title_id ||
             (patch.enable_env != nullptr &&
              std::string_view{std::getenv(patch.enable_env) ? std::getenv(patch.enable_env) : ""} !=
-                 "1")) {
+                 "1") ||
+            (patch.setting_enabled != nullptr && !patch.setting_enabled())) {
             continue;
         }
         const auto patch_disabled =
@@ -1412,6 +1495,19 @@ PatchManager::Metadata PatchManager::ParseControlNCA(const NCA& nca) const {
         return metadata;
     const FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(application_id), system.GetFileSystemController(), system.GetContentProvider()};
     return pm_update.GetControlMetadata();
+}
+
+std::optional<size_t> OotHighRefreshScaleOffset(std::span<const u8> code) {
+    // The call, and the routine up to the scale word (the word may already hold another scale).
+    const BuiltinPatchRecord& call = HIGH_REFRESH_RECORDS[0];
+    const auto routine = std::span<const u8>{HIGH_REFRESH_ROUTINE}.first(HIGH_REFRESH_SCALE);
+    if (code.size() < HIGH_REFRESH_ROUTINE_OFFSET + HIGH_REFRESH_ROUTINE.size() ||
+        code.size() < call.module_offset + call.bytes.size() ||
+        !std::ranges::equal(code.subspan(call.module_offset, call.bytes.size()), call.bytes) ||
+        !std::ranges::equal(code.subspan(HIGH_REFRESH_ROUTINE_OFFSET, routine.size()), routine)) {
+        return std::nullopt;
+    }
+    return HIGH_REFRESH_ROUTINE_OFFSET + HIGH_REFRESH_SCALE;
 }
 
 } // namespace FileSys

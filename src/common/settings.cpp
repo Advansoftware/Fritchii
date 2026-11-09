@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <version>
+#include <atomic>
 #if __cpp_lib_chrono >= 201907L
 #include <chrono>
 #include <exception>
@@ -48,6 +49,7 @@ SETTING(u16, false);
 SWITCHABLE(AnisotropyMode, true);
 SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
+SWITCHABLE(OotRefreshCap, false);
 SWITCHABLE(AspectRatio, true);
 SWITCHABLE(AstcDecodeMode, true);
 SWITCHABLE(AstcRecompression, true);
@@ -407,6 +409,18 @@ bool FrameGenActive() {
     return values.frame_gen.GetValue() && !fritchii;
 }
 
+namespace {
+std::atomic<bool> oot_high_refresh_patched{false};
+} // Anonymous namespace
+
+void SetOotHighRefreshPatched(bool patched) {
+    oot_high_refresh_patched.store(patched, std::memory_order_relaxed);
+}
+
+bool OotHighRefreshPatched() {
+    return oot_high_refresh_patched.load(std::memory_order_relaxed);
+}
+
 bool SpeedLimitEnabled() {
     if (values.use_speed_limit.GetValue()) {
         return true;
@@ -416,7 +430,13 @@ bool SpeedLimitEnabled() {
     // (2026-11-09). It stays at its speed; Turbo and Slow remain the deliberate speed changes.
     static const bool fritchii = std::string_view{Common::g_build_name} == "Fritchii";
     constexpr u64 OcarinaOfTime = 0x0400486024DEC000ULL;
-    return fritchii && GetCurrentProgramID() == OcarinaOfTime;
+    if (!fritchii || GetCurrentProgramID() != OcarinaOfTime) {
+        return false;
+    }
+    // With the high refresh rate patch the step follows real time at any frame rate, so
+    // "Unlocked" presents as fast as the PC can without speeding the game up. The 30 FPS mode
+    // keeps its cap.
+    return !OotHighRefreshPatched() || values.oot_30fps.GetValue();
 }
 
 size_t FrameGenGenerations() {

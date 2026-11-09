@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include "common/common_types.h"
 #include "core/file_sys/nca_metadata.h"
@@ -121,5 +122,10 @@ private:
     const Service::FileSystem::FileSystemController& fs_controller;
     const ContentProvider& content_provider;
 };
+
+/// When `code` (a module's code, from the offset after its NSO header) holds Ocarina of Time's
+/// "High refresh rate (built-in, experimental)" routine, the offset in it of the routine's speed
+/// scale word (a float, 1.0 at 100% speed), else nullopt.
+[[nodiscard]] std::optional<size_t> OotHighRefreshScaleOffset(std::span<const u8> code);
 
 } // namespace FileSys

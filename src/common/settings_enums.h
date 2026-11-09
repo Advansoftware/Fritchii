@@ -165,6 +165,8 @@ ENUM(GpuLogLevel, Off, Errors, Standard, Verbose, All)
 ENUM(GameListMode, TreeView, GridView, CarouselView);
 ENUM(SpeedMode, Standard, Turbo, Slow);
 ENUM(FrameGenType, Lsfg, Fsr3);
+// Ocarina of Time's frame rate cap with its high refresh rate mode on (Settings oot_high_refresh).
+ENUM(OotRefreshCap, Display, Hz90, Hz120, Hz144, Hz165);
 
 template <typename Type>
 inline std::string_view CanonicalizeEnum(Type id) {

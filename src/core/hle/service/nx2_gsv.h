@@ -1945,6 +1945,7 @@ private:
     // next vblank instead (title 4 ran at up to 160 fps, its timing and audio with it).
     Nx2PresentPacer m_present_pacer;
     u32 m_swap_word{};
+    u32 m_oot_scale_bits{}; // the speed scale last written (SetOotSpeedScale), 0 = none yet
 
     struct FrameTrace {
         Common::DkbFrameTrace::RateLimit rate;
@@ -1956,10 +1957,61 @@ private:
         bool deadline_reset{};
     } m_frame_trace;
 
+    /// Ocarina of Time's high refresh rate routine: its speed scale word follows the speed limit
+    /// (Turbo, Slow, the Standard percentage; 1.0 when unlocked). Written only when it changes.
+    void SetOotSpeedScale(Kernel::KProcess& process, u64 address) {
+        const u16 limit = Settings::SpeedLimit();
+        const float scale = Settings::values.use_speed_limit.GetValue() && limit != 0
+                                ? static_cast<float>(limit) / 100.0f
+                                : 1.0f;
+        u32 bits;
+        std::memcpy(&bits, &scale, sizeof(bits));
+        if (bits == m_oot_scale_bits) {
+            return;
+        }
+        m_oot_scale_bits = bits;
+        process.GetMemory().Write32(address, bits);
+        LOG_INFO(Service, "Ocarina of Time high refresh rate: speed scale {:.2f}", scale);
+    }
+
+    /// Ocarina of Time's frame period with the high refresh rate patch: the chosen cap, never
+    /// faster than the display (FIFO would not show those frames; the host pacer holds them).
+    /// "Monitor refresh" before the display's rate is known: 60 Hz.
+    static std::chrono::nanoseconds OotHighRefreshInterval() {
+        long long hz = 0;
+        switch (Settings::values.oot_high_refresh_cap.GetValue()) {
+        case Settings::OotRefreshCap::Hz90:
+            hz = 90;
+            break;
+        case Settings::OotRefreshCap::Hz120:
+            hz = 120;
+            break;
+        case Settings::OotRefreshCap::Hz144:
+            hz = 144;
+            break;
+        case Settings::OotRefreshCap::Hz165:
+            hz = 165;
+            break;
+        case Settings::OotRefreshCap::Display:
+        default:
+            break;
+        }
+        const long long display =
+            VideoCommon::Nx2Perf::g_display_refresh_ns.load(std::memory_order_relaxed);
+        long long ns = hz != 0 ? 1'000'000'000LL / hz : display;
+        if (display > 0) {
+            ns = (std::max)(ns, display);
+        }
+        if (ns <= 0) {
+            ns = 1'000'000'000LL / 60;
+        }
+        return std::chrono::nanoseconds{ns};
+    }
+
     // timing: present word 12, (swap interval << 16) | refresh rate. Fire Emblem: Fortune's Weave
     // sends 0x1003c during its boot logos and 0x2003c (two vblanks per frame, 30 fps) after; paced
     // at every vblank it ran at double speed. EDEN_NX2_SWAP_INTERVAL=<n> forces the interval.
-    void PaceToVblank(u32 timing, const Kernel::KProcess* process) {
+    void PaceToVblank(u32 timing, Kernel::KProcess* process) {
         Common::Nx2Timeline::Span timeline_span{"present: pace to vblank"};
         const bool trace = Common::DkbFrameTrace::Enabled();
         if (trace) {
@@ -2001,6 +2053,23 @@ private:
             m_frame_trace.refresh = refresh_rate;
             m_frame_trace.forced = forced_interval;
         }
+        // Ocarina of Time with the high refresh rate patch (Settings oot_high_refresh, off by
+        // default): its step always follows real time, so pacing alone no longer sets its speed.
+        // The speed limit (Turbo, Slow) scales the step through the routine's scale word instead,
+        // and outside the 30 FPS mode frames are paced at the chosen cap, not the game's 60 Hz.
+        const u64 oot_scale_address = process != nullptr &&
+                                              process->GetProgramId() == OcarinaOfTimeId
+                                          ? process->GetOotHighRefreshScaleAddress()
+                                          : 0;
+        const bool high_refresh = oot_scale_address != 0 && !Settings::values.oot_30fps.GetValue();
+        if (oot_scale_address != 0) {
+            SetOotSpeedScale(*process, oot_scale_address);
+            // The game starts its frames on the vsync event: at the cap, unlocked at 240 Hz.
+            SetVsyncInterval(!high_refresh ? DefaultVblankInterval()
+                             : Settings::SpeedLimitEnabled() ? OotHighRefreshInterval()
+                                                             : std::chrono::nanoseconds{
+                                                                   1'000'000'000LL / 240});
+        }
         if (!Settings::SpeedLimitEnabled() || Settings::SpeedLimit() == 0) {
             VideoCommon::Nx2Perf::g_guest_frame_interval_ns.store(0, std::memory_order_relaxed);
             return;
@@ -2009,8 +2078,11 @@ private:
             LOG_INFO(Service, "nx2:vi2 present #{} swap interval {} at {} Hz (word 12 = {:#x})",
                      m_presents, swap_interval, refresh_rate, timing);
         }
-        auto interval = std::chrono::nanoseconds{
-            100'000'000'000LL * swap_interval / refresh_rate / Settings::SpeedLimit()};
+        auto interval =
+            high_refresh
+                ? OotHighRefreshInterval()
+                : std::chrono::nanoseconds{100'000'000'000LL * swap_interval / refresh_rate /
+                                           (oot_scale_address != 0 ? 100 : Settings::SpeedLimit())};
         // Genlock: with the host frame pacer on, a frame period within 1% of a whole number of
         // display refreshes becomes exactly that many measured refreshes (a "120 Hz" display at
         // 119.98 Hz: 33.3389 ms instead of 33.3333). On the game's own clock its frames drifted
@@ -2624,23 +2696,48 @@ private:
         }
     }
 
+    // EDEN_NX2_VSYNC_HZ=<rate> (experiment): the game starts frames on the vsync event, so a
+    // frame that misses a 60 Hz tick idles until the next one.
+    static const char* VsyncHzOverride() {
+        static const char* const text = std::getenv("EDEN_NX2_VSYNC_HZ");
+        return text;
+    }
+
+    static std::chrono::nanoseconds DefaultVblankInterval() {
+        static const std::chrono::nanoseconds interval{[] {
+            const char* text = VsyncHzOverride();
+            const long long hz = text ? (std::max)(std::strtoll(text, nullptr, 10), 1LL) : 60LL;
+            return 1'000'000'000LL / hz;
+        }()};
+        return interval;
+    }
+
+    /// A vsync event period other than the default from the next tick on (Ocarina of Time's high
+    /// refresh rate). EDEN_NX2_VSYNC_HZ wins.
+    void SetVsyncInterval(std::chrono::nanoseconds interval) {
+        if (VsyncHzOverride() == nullptr) {
+            m_vsync->interval_ns.store(interval.count(), std::memory_order_relaxed);
+        }
+    }
+
     void StartVsyncTimer() {
         if (!m_vsync_timer) {
-            // EDEN_NX2_VSYNC_HZ=<rate> (experiment): the game starts frames on this event, so a
-            // frame that misses a 60 Hz tick idles until the next one.
-            static const std::chrono::nanoseconds VblankInterval{[] {
-                const char* text = std::getenv("EDEN_NX2_VSYNC_HZ");
-                const long long hz = text ? (std::max)(std::strtoll(text, nullptr, 10), 1LL) : 60LL;
-                return 1'000'000'000LL / hz;
-            }()};
+            const std::chrono::nanoseconds VblankInterval = DefaultVblankInterval();
             m_vsync_timer = Core::Timing::CreateEvent(
                 "nx2:vi2 vsync",
-                [vsync_state = m_vsync, &kernel = system.Kernel()](
+                [vsync_state = m_vsync, &kernel = system.Kernel(), VblankInterval](
                     s64 scheduled,
                     std::chrono::nanoseconds late) -> std::optional<std::chrono::nanoseconds> {
                     std::scoped_lock lk{vsync_state->mutex};
                     for (auto* vsync : vsync_state->events) {
                         vsync->Signal(kernel);
+                    }
+                    // 0 = the default period, as scheduled.
+                    std::optional<std::chrono::nanoseconds> next;
+                    if (const s64 interval_ns =
+                            vsync_state->interval_ns.load(std::memory_order_relaxed);
+                        interval_ns > 0) {
+                        next = std::chrono::nanoseconds{interval_ns};
                     }
                     if (Common::DkbFrameTrace::Enabled()) {
                         const s64 observed = scheduled + late.count();
@@ -2672,7 +2769,7 @@ private:
                             vsync_state->trace_min_gap.reset();
                         }
                     }
-                    return std::nullopt;
+                    return next;
                 });
             system.CoreTiming().ScheduleLoopingEvent(VblankInterval, VblankInterval, m_vsync_timer);
         }
@@ -2691,6 +2788,7 @@ private:
         s64 trace_max_late{};
         u64 trace_callbacks{}, trace_late_callbacks{};
         std::atomic<u64> trace_present{};
+        std::atomic<s64> interval_ns{}; // SetVsyncInterval; 0 = the default period
     };
     std::shared_ptr<VsyncState> m_vsync = std::make_shared<VsyncState>();
     std::shared_ptr<Core::Timing::EventType> m_vsync_timer;
