@@ -1501,6 +1501,20 @@ inline bool Nx2VideoSyncTraceEnabled() {
     return enabled;
 }
 
+// EDEN_NX2_VIDEO_PTS_SYNC (on unless 0): movies follow their timestamps. When an output image
+// comes free, the decode thread writes the newest decoded frame that is due by the playback clock
+// (the audio the host device played since the movie's first frame; the wall clock when no audio
+// is counted) and drops the older ones, so a game that takes one movie frame per game frame
+// (Ocarina of Time: a 60 fps movie in a 30 fps loop) no longer plays it slower than its audio.
+// A frame not yet due waits (at most 250 ms), so a game that buffers ahead gets no duplicates.
+inline bool Nx2VideoPtsSyncEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_VIDEO_PTS_SYNC");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
 // EDEN_NX2_VIDEO_RELEASE_WAIT_MS (experiment, default 100): the longest the decode thread waits
 // for the game's GPU reads of an output image it gave back before writing the next frame into
 // it. 0 writes at once: the game can then show a frame early.
@@ -2826,6 +2840,8 @@ private:
         u64 frames{};
         u64 window_frames{};
         u64 empty_polls{};
+        u64 dropped{}; ///< Decoded frames skipped by EDEN_NX2_VIDEO_PTS_SYNC (window)
+        u64 held{};    ///< Times a frame not yet due waited (window)
         double last_late_ms{};
         Timing decode;
         Timing convert;
@@ -2833,6 +2849,21 @@ private:
         Timing write;
         Timing pickup;
     };
+    /// EDEN_NX2_VIDEO_PTS_SYNC: the playback clock of the movie playing (m_mutex).
+    struct PlaybackClock {
+        bool started{};
+        bool audio{};       ///< Clocked by the audio played, else by the wall clock
+        std::chrono::steady_clock::time_point wall0{};
+        u64 audio0{};
+        u64 pts0{};         ///< Timestamp (us) of the first frame the game took
+        u64 last_pts{};     ///< Of the last written frame
+        u64 last_decoded_pts{};
+        s64 interval_us{16'667}; ///< Between decoded frames (average)
+        std::chrono::steady_clock::time_point hold_since{};
+        std::chrono::microseconds hold_wait{};
+        u64 dropped{};      ///< This movie
+    };
+    enum class ClockPick { Write, DecodeMore, Hold };
     struct Fence {
         u32 syncpoint;
         u32 value;
@@ -3084,6 +3115,7 @@ private:
                 TraceEnd(ctx.GetCommand() == 8 ? ", flush" : ", stop");
             }
             m_inputs.Clear();
+            m_clock.started = false;
             m_flush = true;
             m_stream_ended = false;
             m_end_queued = false;
@@ -3144,6 +3176,18 @@ private:
             if (!m_outputs.empty()) {
                 output = m_outputs.front();
                 m_outputs.pop_front();
+                if (Nx2VideoPtsSyncEnabled() &&
+                    output->ready != std::chrono::steady_clock::time_point{}) {
+                    // How long a written frame waits for the game: frames are picked that far
+                    // ahead of the clock.
+                    const double us = std::chrono::duration<double, std::micro>(
+                                          std::chrono::steady_clock::now() - output->ready)
+                                          .count();
+                    m_pickup_us = m_pickup_us == 0.0 ? us : m_pickup_us * 0.9 + us * 0.1;
+                }
+                if (Nx2VideoPtsSyncEnabled()) {
+                    StartClock(*output);
+                }
                 if (Nx2VideoSyncTraceEnabled()) {
                     TraceAcquired(*output);
                 }
@@ -3192,6 +3236,7 @@ private:
             if (m_flush) {
                 m_flush = false;
                 m_decoded.clear();
+                m_clock.started = false;
                 if (decoder) {
                     lk.unlock();
                     decoder->Reset();
@@ -3199,7 +3244,25 @@ private:
                 }
                 continue;
             }
-            if (!m_decoded.empty() && !m_free.empty()) {
+            bool write = !m_decoded.empty() && !m_free.empty();
+            if (write && Nx2VideoPtsSyncEnabled()) {
+                switch (PickByClock()) {
+                case ClockPick::Write:
+                    break;
+                case ClockPick::DecodeMore:
+                    write = false;
+                    break;
+                case ClockPick::Hold:
+                    if (!m_inputs.Empty() && m_decoded.size() < MaxDecodedAhead) {
+                        // Decode ahead while the frame waits.
+                        write = false;
+                        break;
+                    }
+                    m_cv.wait_for(lk, m_clock.hold_wait, [&] { return m_quit || m_flush; });
+                    continue;
+                }
+            }
+            if (write) {
                 Decoded frame = std::move(m_decoded.front());
                 m_decoded.pop_front();
                 const u32 image = m_free.front();
@@ -3252,6 +3315,9 @@ private:
                 }
                 system.Host1x().GetSyncpointManager().IncrementGuest(m_syncpoint);
                 m_last_output = m_outputs.back();
+                if (Nx2VideoPtsSyncEnabled()) {
+                    NoteWritten(frame);
+                }
                 if (frame.end && m_inputs.Empty() && m_decoded.empty() &&
                     system.GetApplicationProcessProgramID() == Settings::MarioKartWorldProgramId) {
                     DrainFreeAsEndOfStream();
@@ -3262,6 +3328,9 @@ private:
                              GetServiceName(), m_frames_out, width, height, frame.pts,
                              frame.end ? ", end of stream" : "", image);
                 }
+                continue;
+            }
+            if (m_inputs.Empty()) {
                 continue;
             }
             Input input = m_inputs.Pop();
@@ -3316,6 +3385,14 @@ private:
             }
             for (auto& picture : pictures) {
                 const u64 pts = picture.pts;
+                if (Nx2VideoPtsSyncEnabled()) {
+                    // The movie's frame interval, for how far ahead a frame counts as due.
+                    const s64 delta = static_cast<s64>(pts - m_clock.last_decoded_pts);
+                    if (delta > 1'000 && delta < 200'000) {
+                        m_clock.interval_us = (m_clock.interval_us * 7 + delta) / 8;
+                    }
+                    m_clock.last_decoded_pts = pts;
+                }
                 m_decoded.push_back({std::move(picture), pts, false});
             }
             if (pictures.empty() && !input.end && decoder->Failed()) {
@@ -3333,6 +3410,111 @@ private:
                     m_decoded.back().end = true;
                 }
             }
+        }
+    }
+
+    // EDEN_NX2_VIDEO_PTS_SYNC: the playback clock's timestamp (us) a frame written now should
+    // have: the movie's first timestamp, plus the audio played since (or the wall time), plus
+    // how long the game takes to pick a written frame up (m_mutex held).
+    s64 TargetPts(std::chrono::steady_clock::time_point now) {
+        auto& c = m_clock;
+        const double wall_us = std::chrono::duration<double, std::micro>(now - c.wall0).count();
+        double clock_us = wall_us;
+        if (c.audio) {
+            const u64 played =
+                AudioCore::Sink::GetRenderOutputClock().played.load(std::memory_order_relaxed);
+            const double audio_us =
+                static_cast<double>(played - c.audio0) * 1e6 / AudioCore::TargetSampleRate;
+            if (wall_us > 500'000.0 && audio_us < wall_us / 4) {
+                // No audio counted (another sink, or none playing): follow the wall clock.
+                c.audio = false;
+                LOG_INFO(Service, "{} movie clock: no audio played, using the wall clock",
+                         GetServiceName());
+            } else {
+                clock_us = audio_us;
+            }
+        }
+        const double lead_us = std::min(m_pickup_us, 50'000.0);
+        return static_cast<s64>(c.pts0) + static_cast<s64>(clock_us + lead_us);
+    }
+
+    // EDEN_NX2_VIDEO_PTS_SYNC: an output image is free; drops the decoded frames the clock has
+    // passed and says whether to write the front one now, decode further first, or wait
+    // (m_mutex held, m_decoded not empty).
+    ClockPick PickByClock() {
+        auto& c = m_clock;
+        if (!c.started) {
+            return ClockPick::Write;
+        }
+        if (m_decoded.front().pts < c.last_pts) {
+            // Timestamps went back: another movie (or the same one again). Start over.
+            c.started = false;
+            return ClockPick::Write;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        const s64 target = TargetPts(now);
+        const s64 tolerance = c.interval_us / 2;
+        const auto due = [&](u64 pts) { return static_cast<s64>(pts) <= target + tolerance; };
+        // Keep the newest due frame; never drop the end of the stream.
+        while (m_decoded.size() >= 2 && !m_decoded.front().end && due(m_decoded[1].pts)) {
+            m_decoded.pop_front();
+            ++c.dropped;
+            ++m_sync.dropped;
+        }
+        const Decoded& front = m_decoded.front();
+        if (due(front.pts)) {
+            c.hold_since = {};
+            // The next frame would be due too: decode it first (input is usually queued).
+            if (m_decoded.size() == 1 && !front.end && !m_inputs.Empty() &&
+                due(front.pts + static_cast<u64>(std::max<s64>(c.interval_us, 1)))) {
+                return ClockPick::DecodeMore;
+            }
+            return ClockPick::Write;
+        }
+        // Not due yet: wait for it, never hand out a frame early. A clock that doesn't move
+        // (audio stalled) only delays it, by 250 ms at most.
+        if (c.hold_since == std::chrono::steady_clock::time_point{}) {
+            c.hold_since = now;
+            ++m_sync.held;
+        } else if (now - c.hold_since >= std::chrono::milliseconds{250}) {
+            c.hold_since = {};
+            return ClockPick::Write;
+        }
+        const s64 early_us = static_cast<s64>(front.pts) - (target + tolerance);
+        c.hold_wait = std::chrono::microseconds{std::clamp<s64>(early_us, 1'000, 20'000)};
+        return ClockPick::Hold;
+    }
+
+    // EDEN_NX2_VIDEO_PTS_SYNC: the game took a frame (213). The first of a movie starts its
+    // clock: the game starts showing it (and, presumably, its audio) now, which can be well
+    // after the first frames were written (m_mutex held).
+    void StartClock(const Output& output) {
+        auto& c = m_clock;
+        // Not on the end of a stream, nor on a frame of an earlier movie still in an image
+        // (newer frames were written since).
+        if (c.started || output.end || output.pts > c.last_pts) {
+            return;
+        }
+        c.started = true;
+        c.audio = AudioCore::Sink::RenderOutputClockEnabled();
+        c.wall0 = std::chrono::steady_clock::now();
+        c.audio0 = AudioCore::Sink::GetRenderOutputClock().played.load(std::memory_order_relaxed);
+        c.pts0 = output.pts;
+        c.hold_since = {};
+        c.dropped = 0;
+    }
+
+    // EDEN_NX2_VIDEO_PTS_SYNC: a frame went into an output image (m_mutex held).
+    void NoteWritten(const Decoded& frame) {
+        auto& c = m_clock;
+        c.last_pts = frame.pts;
+        if (frame.end) {
+            if (c.started && c.dropped != 0) {
+                LOG_INFO(Service, "{} movie ended: {} late frames skipped to keep up with the "
+                                  "{} clock",
+                         GetServiceName(), c.dropped, c.audio ? "audio" : "wall");
+            }
+            c.started = false;
         }
     }
 
@@ -3597,18 +3779,25 @@ private:
                  "clock {:+.0f} ms | no frame for the game {} times | ms avg/max: decode "
                  "{:.1f}/{:.1f} convert {:.1f}/{:.1f} image wait {:.1f}/{:.1f} write "
                  "{:.1f}/{:.1f} pickup {:.1f}/{:.1f} | queued: input {} decoded {} finished {} "
-                 "free images {} | {} decoder{}",
+                 "free images {} | pts sync: dropped {} held {} ({} clock) | {} decoder{}",
                  m_sync_movies, wall_ms / 1000.0, t.frames,
                  static_cast<double>(t.window_frames) / window_s, late_ms, late_ms - t.last_late_ms,
                  audio_ms - pts_ms, starved_ms, guest_ms - wall_ms, t.empty_polls,
                  t.decode.Average(), t.decode.max_ms, t.convert.Average(), t.convert.max_ms,
                  t.fence.Average(), t.fence.max_ms, t.write.Average(), t.write.max_ms,
                  t.pickup.Average(), t.pickup.max_ms, m_inputs.Size(), m_decoded.size(),
-                 m_outputs.size(), m_free.size(), t.hardware ? "GPU" : "CPU", note);
+                 m_outputs.size(), m_free.size(), t.dropped, t.held,
+                 !Nx2VideoPtsSyncEnabled() ? "off"
+                 : !m_clock.started        ? "idle"
+                 : m_clock.audio           ? "audio"
+                                           : "wall",
+                 t.hardware ? "GPU" : "CPU", note);
         t.last_late_ms = late_ms;
         t.window0 = now;
         t.window_frames = 0;
         t.empty_polls = 0;
+        t.dropped = 0;
+        t.held = 0;
         t.window_starved0 = starved;
         t.decode = {};
         t.convert = {};
@@ -3675,6 +3864,8 @@ private:
     std::deque<Output> m_outputs;      ///< Finished, for 213
     Output m_last_output{};
     SyncTrace m_sync;                  ///< EDEN_NX2_VIDEO_TRACE
+    PlaybackClock m_clock;             ///< EDEN_NX2_VIDEO_PTS_SYNC
+    double m_pickup_us{};              ///< Written frame to the game's 213 (average)
     u32 m_sync_movies{};               ///< Movies the trace has seen in this session
     bool m_stream_ended{};             ///< End-of-stream frame handed out, nothing submitted since
     bool m_end_queued{};
