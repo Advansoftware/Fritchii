@@ -64,7 +64,7 @@ inline bool Enabled() {
 
 inline bool On(Opt opt) {
     static const unsigned off = [] {
-        const auto bit = [](Opt opt) { return 1U << static_cast<unsigned>(opt); };
+        const auto bit = [](Opt option) { return 1U << static_cast<unsigned>(option); };
         const auto names = [](const char* variable) {
             unsigned bits = 0;
             std::string_view list = std::getenv(variable) ? std::getenv(variable) : "";
