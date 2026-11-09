@@ -346,6 +346,19 @@ inline std::atomic<int> g_idle_pause{-1};
 /// measured yet: compare the 10 s memory line's compute count and the working set over a long
 /// session, and the "Evicted N compute pipelines" log's "dispatched again" count (each is a
 /// GPU-thread rebuild, a possible hitch).
+/// EXP52 (live; with EXP19 / EDEN_NX2_PIPELINE_CLEAN on; fable52_answer_1 section 1; Vulkan
+/// PipelineCache::CurrentGraphicsPipelineClean): 1 = when only the bound programs changed since
+/// the last key (every other Refresh input stands), the key's state is kept and only what the
+/// programs feed is redone (with dynamic vertex input, the attribute types masked by what the
+/// programs read), then Next / the cache map looks the new key up, without
+/// FixedPipelineState::Refresh. 2 = as 1, and each such key is also built by the full Refresh and
+/// compared byte for byte; Refresh's is kept, the first 16 differences are logged ("Programs-only
+/// key (EXP52=2) differs"). The "EDEN_NX2_PIPELINE_CLEAN per second" line counts "programs only"
+/// and, at 2, "verified N, M differ". With EXP52 on its "programs" reason stays 0 (a change of
+/// programs together with other state counts under that state). Off by default, not measured yet:
+/// prove 2 shows 0 differ first (under EXP19=2 without EXP50, blend writes without
+/// Dirty::Blending already leave the clean lookup's attachments stale, and verify reports that
+/// too), then compare the lookup zone with profile_toggle (EXP52 0 vs 1).
 inline constexpr int ExperimentCount = 64;
 inline std::atomic<int> g_experiments[ExperimentCount]{};
 
