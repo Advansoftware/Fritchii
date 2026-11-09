@@ -64,6 +64,14 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
                             std::chrono::steady_clock::now() - start)
                             .count();
         if (trimmed < Busy) {
+            // A slow pass is logged too: its working set query and page reads take ~1 s at
+            // ~7 GB resident, and freezes need lining up against it (fable52_answer_1 M8c).
+            if (ms >= 100) {
+                LOG_INFO(HW_Memory,
+                         "Zero-page pass: {} MiB trimmed of {} MiB resident in {} ms (next in {} s)",
+                         trimmed >> 20, resident >> 20, ms,
+                         (std::min)(interval * 2, std::chrono::seconds{60}).count());
+            }
             interval = (std::min)(interval * 2, std::chrono::seconds{60});
             continue;
         }

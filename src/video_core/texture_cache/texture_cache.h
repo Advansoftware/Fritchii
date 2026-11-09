@@ -3623,10 +3623,15 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     // Which test refused the last call (EXP7's new-image line).
     const char* clear_refusal = "";
     const auto overwritten_by_clear = [&] {
-        if (!clearing_render_targets || !join_copies_to_do.empty() ||
-            new_info.type != ImageType::e2D || new_info.resources.levels != 1 ||
+        if (!clearing_render_targets) {
+            return (clear_refusal = "not clearing", false);
+        }
+        if (!join_copies_to_do.empty()) {
+            return (clear_refusal = "join copies pending", false);
+        }
+        if (new_info.type != ImageType::e2D || new_info.resources.levels != 1 ||
             new_info.resources.layers != 1 || new_info.num_samples != 1) {
-            return (clear_refusal = "not clearing, joins, or not a plain 2D target", false);
+            return (clear_refusal = "not a plain 2D target", false);
         }
         const auto& regs = maxwell3d->regs;
         const auto& surface = regs.clear_surface;
@@ -3639,6 +3644,18 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             const auto& scissor = regs.scissor_test[0];
             if (scissor.min_x != 0 || scissor.min_y != 0 || scissor.max_x < width ||
                 scissor.max_y < height) {
+                // EXP7: the numbers, for the per-object depth targets whose width is padded to
+                // 16 (fable52_answer_4: is the clear only a few pixels of padding short?).
+                static std::atomic<u32> scissor_logged{};
+                if (VideoCore::Nx2Debug::Experiment(7) != 0 &&
+                    scissor_logged.fetch_add(1, std::memory_order_relaxed) < 40) {
+                    LOG_WARNING(HW_GPU,
+                                "Clear rule: scissor ({},{})-({},{}) vs new image format {} "
+                                "{}x{} at {:#x}",
+                                scissor.min_x.Value(), scissor.min_y.Value(),
+                                scissor.max_x.Value(), scissor.max_y.Value(),
+                                static_cast<u32>(new_info.format), width, height, gpu_addr);
+                }
                 return (clear_refusal = "scissor", false);
             }
         }
@@ -3925,7 +3942,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
                         clear_skip  ? "skipped (clear)"
                         : copy_skip ? "skipped (copies)"
                                     : "done",
-                        clear_skip || clear_refusal[0] == ' ' ? "" : ", clear refused: ",
+                        clear_skip || clear_refusal[0] == '\0' ? "" : ", clear refused: ",
                         clear_skip ? "" : clear_refusal);
         }
     }
