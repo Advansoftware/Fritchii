@@ -49,7 +49,6 @@
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2.h"
-#include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_download_trace.h"
 #include "video_core/surface.h"
 #include "video_core/texture_cache/types.h"
@@ -873,27 +872,6 @@ private:
     bool download_cpu_read_ranges{};
     Common::RangeSet<DAddr> gpu_modified_ranges;
     std::deque<Common::RangeSet<DAddr>> committed_gpu_modified_ranges;
-
-    /// Written storage bindings past their write mark: the part of a native compute binding past
-    /// what the store analysis proved, or past EDEN_NX2_WRITTEN_SSBO_MARK_KIB's cap. A shader that
-    /// writes there leaves GPU data nothing tracks, and the next upload of the page replaced it
-    /// with stale guest bytes: Ocarina of Time's huge glowing triangles, which piled up over
-    /// loading zones (2026-11-09; marking whole bindings, EXP1=1, stopped them at -28% FPS). CPU
-    /// writes on these pages are uploaded inline instead of marking the page, so reads, fences and
-    /// downloads stay as they were. EDEN_NX2_EXP44=1 (live) turns this off.
-    Common::RangeSet<DAddr> unmarked_tail_ranges;
-    u64 tail_inline_writes{};
-    u64 tail_inline_bytes{};
-
-    void AddUnmarkedTail(DAddr device_addr, u64 size) {
-        if (size != 0 && VideoCore::Nx2Debug::Experiment(44) == 0) {
-            unmarked_tail_ranges.Add(device_addr, size);
-        }
-    }
-    [[nodiscard]] bool InUnmarkedTail(DAddr device_addr, u64 size) const {
-        return !unmarked_tail_ranges.Empty() && VideoCore::Nx2Debug::Experiment(44) == 0 &&
-               unmarked_tail_ranges.Intersects(device_addr, size);
-    }
 
     // Async Buffers
     std::deque<std::optional<Async_Buffer>> async_buffers;

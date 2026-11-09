@@ -296,10 +296,6 @@ inline std::atomic<int> g_idle_pause{-1};
 /// collector's device memory figure, as deleted images waiting for the GPU are. Logs "Image pool
 /// (EXP42) last 600 frames" and counts pooled creates in "Slow clear texture cache". 1 is the default
 /// (LoadExperiments); 0 = off.
-/// EXP44 (live; 1 = off): the unmarked tail guard (BufferCache::unmarked_tail_ranges,
-/// fable_answer_24): CPU writes on pages past a written storage binding's write mark are uploaded
-/// inline instead of marking the page, so untracked GPU writes there are not replaced by stale
-/// guest bytes (Ocarina of Time's glowing triangles, 2026-11-09).
 /// EXP43 (live; render target relocation, fable_answer_12 2A; TextureCache::JoinImages): a render
 /// target a clear overwrites whole, with no copies, aliases or remapped images among its overlaps
 /// and exactly one predecessor among its bad overlaps (an image of the same single-level,
