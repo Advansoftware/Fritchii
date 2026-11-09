@@ -344,10 +344,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, mesh_shaders, tr("Mesh Shaders"),
            tr("How Switch 2 games' mesh shader geometry is drawn.\n"
               "Native uses the GPU's mesh shaders. Compute Fallback emulates them with compute "
-              "shaders: it is slower in scenes with a lot of foliage, and it can't draw every kind "
-              "of mesh program.\n"
-              "Automatic uses the compute fallback on Mesa's AMD driver (RADV), where native mesh "
-              "shaders reset the GPU, and native mesh shaders everywhere else."));
+              "shaders: it can be slower in scenes with a lot of foliage, and it can't draw every "
+              "kind of mesh program.\n"
+              "Automatic uses the compute fallback on AMD GPUs, where native mesh shaders can hang "
+              "the GPU, and native mesh shaders everywhere else."));
 
     INSERT(
         Settings, sample_shading, tr("Sample Shading"),
