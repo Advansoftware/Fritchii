@@ -199,8 +199,9 @@ RenderOutputClock& GetRenderOutputClock() {
 
 bool RenderOutputClockEnabled() {
     static const bool enabled = [] {
-        const char* value = std::getenv("EDEN_NX2_VIDEO_TRACE");
-        return value != nullptr && value[0] != '0';
+        const char* trace = std::getenv("EDEN_NX2_VIDEO_TRACE");
+        const char* sync = std::getenv("EDEN_NX2_VIDEO_PTS_SYNC");
+        return (trace != nullptr && trace[0] != '0') || sync == nullptr || sync[0] != '0';
     }();
     return enabled;
 }
