@@ -170,6 +170,16 @@ inline std::atomic<int> g_idle_pause{-1};
 /// EXP35=2 (live): every guest write of cached memory is collected for the back, not only writes to
 /// never-GPU-written pages. EXP60 (live): 1 = a guest read whose cache mutexes stay taken after a
 /// short spin is answered with a flush request served by the back (GetFlushArea).
+/// EXP49 (live; async read-back, the core of zortos293/Lichii#1028 0b83798bf6): 1 = a guest read
+/// of GPU-written buffer memory (GPU::OnCPURead) has the GPU thread record and submit the
+/// downloads without waiting for the host GPU (RasterizerVulkan::FlushRegionForRead). The reading
+/// thread waits for them and writes them to guest memory (BufferCache::FinishReadDownloads); a
+/// read whose bytes are already on their way only waits. Until they land the bytes stay
+/// GPU-modified; guest CPU writes keep their bytes (ClearReplacedDownload, pending writes at
+/// landing); writes from the GPU's side (MemoryManager, query results, DMA clears and copies) land
+/// them first. 0 = the synchronous flush (Scheduler::Finish on the GPU thread under the buffer
+/// cache's lock). Both log "Read-back (EXP49) per second" every 10 s (reads, GPU thread time in
+/// read flushes, reader waits). Not ported: #1028's early downloads and EDEN_NX2_READ_CHECK.
 /// EXP27 (keep the split's back fed, fewer submits; zortos293/Lichii#717), bits: 1 = the front
 /// publishes before it yields or sleeps polling suspended channels (PUBLISH_WAITS,
 /// GpuSplit::PublishBeforeWait), 2 = retired (was PUBLISH_IDLE, each entry published at once
