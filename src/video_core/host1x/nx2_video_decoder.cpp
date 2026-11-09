@@ -146,6 +146,7 @@ struct Nx2VideoDecoder::Impl {
     std::unique_ptr<FFmpeg::DecoderContext> context;
     SwsContext* scaler{};
     bool open{};
+    bool ever_open{};
     bool using_hardware{};
     bool received_any{};
     u64 errors_seen{};
@@ -299,6 +300,7 @@ Nx2VideoDecoder::Nx2VideoDecoder(std::string_view mime) : impl{std::make_unique<
     } else {
         impl->open = impl->Open(false);
     }
+    impl->ever_open = impl->open;
     LOG_INFO(HW_GPU, "nx2 video: decoder for \"{}\" {}{}", mime,
              impl->open ? "open" : "failed to open",
              impl->open ? (impl->using_hardware ? " (GPU)" : " (CPU)") : "");
@@ -308,6 +310,10 @@ Nx2VideoDecoder::~Nx2VideoDecoder() = default;
 
 bool Nx2VideoDecoder::IsOpen() const {
     return impl->open;
+}
+
+bool Nx2VideoDecoder::Failed() const {
+    return impl->ever_open && !impl->open;
 }
 
 bool Nx2VideoDecoder::UsingHardware() const {

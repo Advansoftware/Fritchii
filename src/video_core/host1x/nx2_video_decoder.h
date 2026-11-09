@@ -46,6 +46,9 @@ public:
 
     bool IsOpen() const;
 
+    /// The decoder opened, then stopped after faults: it outputs nothing more.
+    bool Failed() const;
+
     /// Whether frames are decoded on the host GPU (NVDEC emulation GPU, a codec it supports).
     bool UsingHardware() const;
 

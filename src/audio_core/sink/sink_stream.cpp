@@ -192,6 +192,19 @@ void SinkStream::ProcessAudioIn(std::span<const s16> input_buffer, std::size_t n
     }
 }
 
+RenderOutputClock& GetRenderOutputClock() {
+    static RenderOutputClock clock;
+    return clock;
+}
+
+bool RenderOutputClockEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_VIDEO_TRACE");
+        return value != nullptr && value[0] != '0';
+    }();
+    return enabled;
+}
+
 void SinkStream::ProcessAudioOutAndRender(std::span<s16> output_buffer, std::size_t num_frames) {
     if (num_frames == 0) {
         return;
@@ -269,6 +282,13 @@ void SinkStream::ProcessAudioOutAndRender(std::span<s16> output_buffer, std::siz
         last_sample_count_update_time = system.CoreTiming().GetGlobalTimeNs();
         min_played_sample_count = max_played_sample_count;
         max_played_sample_count += actual_frames_written;
+    }
+
+    if (RenderOutputClockEnabled() && type == StreamType::Render &&
+        name == "ADSP_RenderStream-0") {
+        auto& clock = GetRenderOutputClock();
+        clock.played.fetch_add(actual_frames_written, std::memory_order_relaxed);
+        clock.starved.fetch_add(num_frames - actual_frames_written, std::memory_order_relaxed);
     }
 }
 
