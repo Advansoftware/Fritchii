@@ -406,7 +406,7 @@ struct Values {
                                                       true};
 
     SwitchableSetting<AntiAliasing> anti_aliasing{linkage,
-                                                  AntiAliasing::Fxaa,
+                                                  AntiAliasing::None,
                                                   "anti_aliasing",
                                                   Category::Renderer,
                                                   Specialization::Default,
