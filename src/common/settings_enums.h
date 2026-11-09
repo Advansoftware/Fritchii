@@ -166,6 +166,8 @@ ENUM(GameListMode, TreeView, GridView, CarouselView);
 ENUM(SpeedMode, Standard, Turbo, Slow);
 ENUM(FrameGenType, Lsfg, Fsr3);
 ENUM(MeshShaderMode, Automatic, Native, Compute);
+// Ocarina of Time's movies: the game's own upscaler, or a bilinear copy (Settings oot_movie_upscale).
+ENUM(OotMovieUpscale, Automatic, Bilinear, Game);
 // Ocarina of Time's frame rate cap with its high refresh rate mode on (Settings oot_high_refresh).
 ENUM(OotRefreshCap, Display, Hz90, Hz120, Hz144, Hz165);
 

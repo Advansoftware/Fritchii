@@ -376,14 +376,9 @@ private:
     /// Native dispatches left to skip while a retained network is being replaced (bounded, so a
     /// non-network pass cannot silence the engine forever).
     u32 network_skip_remaining{};
-    /// Set when the replacement copy fails, so the full network runs from then on.
-    /// EDEN_NX2_OOT_MOVIE_NETWORK=1 (boot) starts it set: Ocarina's own movie upscaler (it removes
-    /// banding, 1080p -> 1440p) instead of the bilinear copy. The copy came in because the network
-    /// cost ~33 ms a frame where tensor operations are emulated; never measured on RTX.
-    bool native_upscale_disabled{[] {
-        const char* value = std::getenv("EDEN_NX2_OOT_MOVIE_NETWORK");
-        return value != nullptr && value[0] == '1';
-    }()};
+    /// Set when the replacement copy fails, so the full network runs from then on. Settings
+    /// oot_movie_upscale chooses the network itself (OotMovieNetworkChosen in the .cpp).
+    bool native_upscale_disabled{};
 
     /// Motion vectors and depth of Fire Emblem: Fortune's Weave's DLSS evaluation, from its first
     /// pass (run earlier in the frame than the network pass the stand-in replaces), with the input

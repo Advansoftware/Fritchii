@@ -33,6 +33,7 @@
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
 #include "video_core/vulkan_common/vma.h"
 #include "video_core/vulkan_common/vulkan_device.h"
+#include "video_core/nx2_perf.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/gpu_logging/gpu_logging.h"
 #ifdef EGLANTINE_STREAMLINE
@@ -1894,6 +1895,8 @@ void Device::RemoveUnsuitableExtensions() {
                                            features.cooperative_matrix,
                                            VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
     }
+    VideoCommon::Nx2Perf::g_native_tensor_ops.store(extensions.cooperative_matrix,
+                                                    std::memory_order_relaxed);
 
     // VK_KHR_workgroup_memory_explicit_layout
     extensions.workgroup_memory_explicit_layout =

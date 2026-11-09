@@ -169,6 +169,11 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, anti_aliasing, tr("Anti-Aliasing Method:"),
            tr("The anti-aliasing method to use.\nSMAA offers the best quality.\nFXAA "
               "can produce a more stable picture in lower resolutions."));
+    INSERT(Settings, oot_movie_upscale, tr("Ocarina of Time movies:"),
+           tr("How the title screen and cutscene videos are scaled up.\nGame's own upscaler: the "
+              "game's video upscaler, which removes banding and sharpens. Fast on NVIDIA RTX, slow "
+              "on GPUs that emulate its math.\nBilinear: a plain, fast stretch.\nAutomatic: the "
+              "game's upscaler where the GPU runs it natively, bilinear elsewhere."));
     INSERT(Settings, oot_anti_aliasing, tr("Ocarina of Time anti-aliasing:"),
            tr("The Legend of Zelda: Ocarina of Time only.\nGame: the game's own anti-aliasing "
               "network, which sharpens heavily.\nNo sharpening: the image as the game renders it, "
@@ -596,6 +601,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(DlssPreset, K, tr("K (recommended)")),
                               PAIR(DlssPreset, L, tr("L")),
                               PAIR(DlssPreset, M, tr("M")),
+                          }});
+    translations->insert({Settings::EnumMetadata<Settings::OotMovieUpscale>::Index(),
+                          {
+                              PAIR(OotMovieUpscale, Automatic, tr("Automatic")),
+                              PAIR(OotMovieUpscale, Bilinear, tr("Bilinear (fast)")),
+                              PAIR(OotMovieUpscale, Game, tr("Game's own upscaler")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::OotAntiAliasing>::Index(),
                           {
