@@ -12,6 +12,7 @@ On Fritchii v4, v4.1, v5 or v5.1 you don't need to download anything: it offers 
 
 Fritchii v5.2, crash fixes.
 
+- **GTX 10 series and older: invisible geometry is drawn again.** Objects the game draws with mesh shaders, which these cards lack, now go through a compute fallback (zortos's prototype, zortos293/Lichii#569, #642, #841). Some foliage or walls may still be missing or flicker.
 - **AMD: textures no longer write into other textures' memory.** Images whose size isn't a multiple of their block size wrote past their edge while being decoded. NVIDIA ignores that, AMD put it in other textures: black blocks, a crosshatch, and in the end a GPU crash. From CheezerWheezer's AMD fork.
 - **AMD (Windows driver): Shader libraries are off by default.** RX 5000 and 6000 cards crashed building them; unticking the setting was the workaround, now it's automatic. NVIDIA keeps them.
 - **The full right-click menu is back on the home screen** (Open Mod Data Location, Dump RomFS, Remove, Verify Integrity, Start Game without Custom Configuration...), for modders.
