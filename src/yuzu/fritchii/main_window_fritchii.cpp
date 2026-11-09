@@ -4,11 +4,14 @@
 // once at the end of the constructor and does nothing in a Lichii build.
 
 #include <QApplication>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QStatusBar>
 #include <QTimer>
 
 #include "core/core.h"
 #include "qt_common/qt_common.h"
+#include "qt_common/util/game.h"
 #include "ui_main.h"
 #include "yuzu/fritchii/fritchii_ui.h"
 #include "yuzu/bootmanager.h"
@@ -26,9 +29,35 @@ void MainWindow::SetUpFritchiiUi() {
         return;
     }
 
-    FritchiiUi::RestructureMenus(*ui, *this,
-                                 {.export_log = [this] { OnExportLog(); },
-                                  .whats_new = [this] { FritchiiUi::ShowWhatsNew(this); }});
+    // For players whose cache went bad: the game's whole shader folder (pipeline caches,
+    // precompiled pipelines and what their preparation kept), after a confirmation. Not while a
+    // game runs, which has those files open.
+    constexpr u64 OcarinaOfTime = 0x0400486024DEC000ULL;
+    const auto delete_shader_cache = [this](u64 program_id) {
+        const QString title = tr("Delete Shader Cache");
+        if (emulation_running || boot_in_progress) {
+            QMessageBox::information(this, title, tr("Stop the game first."));
+            return;
+        }
+        QMessageBox box(QMessageBox::Warning, title,
+                        program_id == OcarinaOfTime ? tr("Delete OoT's shader cache?")
+                                                    : tr("Delete this game's shader cache?"),
+                        QMessageBox::NoButton, this);
+        box.setInformativeText(tr("Only if the game crashes or looks wrong because of it. The "
+                                  "shaders are prepared again on the next start."));
+        QPushButton* remove = box.addButton(tr("Delete"), QMessageBox::DestructiveRole);
+        box.setDefaultButton(box.addButton(QMessageBox::Cancel));
+        box.exec();
+        if (box.clickedButton() == remove) {
+            QtCommon::Game::RemoveAllTransferableShaderCaches(program_id);
+        }
+    };
+
+    FritchiiUi::RestructureMenus(
+        *ui, *this,
+        {.export_log = [this] { OnExportLog(); },
+         .whats_new = [this] { FritchiiUi::ShowWhatsNew(this); },
+         .delete_shader_cache = [delete_shader_cache] { delete_shader_cache(OcarinaOfTime); }});
 
     // "What's new" once per version after an update, when nothing else is on screen: no other
     // dialog (first-launch question, update offer, restart note) and no game running.
@@ -93,6 +122,7 @@ void MainWindow::SetUpFritchiiUi() {
             [this](u64 program_id, const std::string& path) {
                 OpenPerGameConfiguration(program_id, path);
             },
+        .delete_shader_cache = delete_shader_cache,
         .game_list_empty = [this] { return game_list->IsEmpty(); },
         .single_window = [this] { return ui->action_Single_Window_Mode->isChecked(); },
         .emulation_running = [this] { return emulation_running; },
@@ -125,7 +155,6 @@ void MainWindow::SetUpFritchiiUi() {
         {.pause = [this] { OnPauseGame(); },
          .resume = [this] { OnStartGame(); },
          .game_name = [] {
-             constexpr u64 OcarinaOfTime = 0x0400486024DEC000ULL;
              return QtCommon::system &&
                             QtCommon::system->GetApplicationProcessProgramID() == OcarinaOfTime
                         ? QStringLiteral("OoT")

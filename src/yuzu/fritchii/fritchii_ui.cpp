@@ -249,8 +249,11 @@ void RestructureMenus(Ui::MainWindow& ui, QMainWindow& window, const MenuHooks& 
     QAction* first_help = ui.menu_Help->actions().value(0);
     auto* whats_new = new QAction(tr("What's &New"), &window);
     QObject::connect(whats_new, &QAction::triggered, &window, hooks.whats_new);
+    auto* delete_cache = new QAction(tr("&Delete Shader Cache..."), &window);
+    QObject::connect(delete_cache, &QAction::triggered, &window, hooks.delete_shader_cache);
     ui.menu_Help->insertAction(first_help, export_log);
     ui.menu_Help->insertAction(first_help, ui.action_Log_Folder);
+    ui.menu_Help->insertAction(first_help, delete_cache);
     ui.menu_Help->insertSeparator(first_help);
     ui.menu_Help->insertAction(first_help, whats_new);
 

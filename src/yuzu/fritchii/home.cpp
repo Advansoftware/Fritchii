@@ -248,6 +248,8 @@ QWidget* Home::MakePage() {
         menu.addAction(tr("Game Settings..."), &menu, [this] {
             hooks.game_settings(hero_id, hero_path.toStdString());
         });
+        menu.addAction(tr("Delete Shader Cache..."), &menu,
+                       [this] { hooks.delete_shader_cache(hero_id); });
         menu.exec(page->mapToGlobal(pos));
     });
 

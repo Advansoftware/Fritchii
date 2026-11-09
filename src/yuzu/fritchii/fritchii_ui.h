@@ -38,6 +38,7 @@ bool ApplyTheme();
 struct MenuHooks {
     std::function<void()> export_log;
     std::function<void()> whats_new;
+    std::function<void()> delete_shader_cache; ///< OoT's, after a confirmation
 };
 /// Plain names and Fritchii's grouping for the classic menus (File, Game, View, Tools, Help).
 void RestructureMenus(Ui::MainWindow& ui, QMainWindow& window, const MenuHooks& hooks);

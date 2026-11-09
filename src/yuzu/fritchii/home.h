@@ -25,6 +25,7 @@ struct HomeHooks {
     std::function<void()> add_folder;
     std::function<void()> open_settings;
     std::function<void(u64 program_id, const std::string& path)> game_settings;
+    std::function<void(u64 program_id)> delete_shader_cache; ///< after a confirmation
     std::function<bool()> game_list_empty;
     std::function<bool()> single_window;
     std::function<bool()> emulation_running;
