@@ -3861,6 +3861,10 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
         std::atomic<size_t> fast{};      ///< built in under FastBuild: most likely a driver cache hit
         std::atomic<size_t> failed{};
         std::atomic<size_t> other_device{};
+        /// Of other_device, per dynamic state the record and this device disagree on (recorded
+        /// dynamic / this device dynamic): EDS, EDS2, EDS2 logic op, EDS3 blend, EDS3 enables,
+        /// color write enable, vertex input, provoking vertex last.
+        std::array<std::atomic<size_t>, 16> other_device_by{};
         std::atomic<size_t> known{};     ///< graphics keys the disk cache holds
         std::atomic<size_t> finished{};
         size_t low_water{};              ///< first record not finished yet (under mutex)
@@ -3979,6 +3983,30 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
                     // builds have not reached would translate it on the GPU thread.
                     if (other_device) {
                         ++state.other_device;
+                        const std::array<std::pair<bool, bool>, 8> flags{{
+                            {key_state.extended_dynamic_state != 0,
+                             dynamic_features.has_extended_dynamic_state},
+                            {key_state.extended_dynamic_state_2 != 0,
+                             dynamic_features.has_extended_dynamic_state_2},
+                            {key_state.extended_dynamic_state_2_logic_op != 0,
+                             dynamic_features.has_extended_dynamic_state_2_logic_op},
+                            {key_state.extended_dynamic_state_3_blend != 0,
+                             dynamic_features.has_extended_dynamic_state_3_blend},
+                            {key_state.extended_dynamic_state_3_enables != 0,
+                             dynamic_features.has_extended_dynamic_state_3_enables},
+                            {key_state.color_write_enable_dynamic != 0,
+                             dynamic_features.has_color_write_enable},
+                            {key_state.dynamic_vertex_input != 0,
+                             dynamic_features.has_dynamic_vertex_input},
+                            {key_state.provoking_vertex_last != 0,
+                             key_state.provoking_vertex_last == 0 ||
+                                 dynamic_features.has_provoking_vertex_last_mode},
+                        }};
+                        for (size_t flag = 0; flag < flags.size(); ++flag) {
+                            if (flags[flag].first != flags[flag].second) {
+                                ++state.other_device_by[flag * 2 + (flags[flag].first ? 0 : 1)];
+                            }
+                        }
                         skipped = true;
                     } else if (!keeping && disk_keys && disk_keys->contains(graphics_key.Hash())) {
                         ++state.known;
@@ -4079,6 +4107,25 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
              state.built.load(), state.fast.load(), FastBuild.count(), state.failed.load(),
              state.known.load() + state.other_device.load(), state.known.load(),
              state.other_device.load(), total - reached, seconds);
+    if (state.other_device.load() != 0) {
+        // Which dynamic states made records "for another device" (recorded on a GPU that has
+        // them dynamic and this one static, or the reverse): AMD players skipped most of the
+        // NVIDIA-recorded recipe (2026-11-09).
+        static constexpr std::array<const char*, 8> names{
+            "EDS", "EDS2", "EDS2 logic op", "EDS3 blend", "EDS3 enables",
+            "color write enable", "vertex input", "provoking vertex last"};
+        std::string by;
+        for (size_t flag = 0; flag < names.size(); ++flag) {
+            const size_t recorded_dynamic = state.other_device_by[flag * 2].load();
+            const size_t device_dynamic = state.other_device_by[flag * 2 + 1].load();
+            if (recorded_dynamic + device_dynamic != 0) {
+                by += fmt::format("{}{}: {} recorded dynamic, {} dynamic here", by.empty() ? "" : "; ",
+                                  names[flag], recorded_dynamic, device_dynamic);
+            }
+        }
+        LOG_WARNING(Render_Vulkan, "Precompiled pipelines for another device: {} ({})",
+                    state.other_device.load(), by);
+    }
     const bool finished = !stop_loading.stop_requested() && !warm_cancel && reached >= total;
     if (keeping && !finished) {
         // Resumed with the checkpoint next time.
