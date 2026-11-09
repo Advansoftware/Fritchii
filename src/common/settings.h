@@ -1031,6 +1031,9 @@ constexpr u32 MAX_FRAME_GEN_MULTIPLIER = 4;
 /// settings (a value left on by an older build made the camera flicker, 2026-11-09).
 [[nodiscard]] bool FrameGenActive();
 [[nodiscard]] u32 FrameGenMultiplier();
+/// Whether emulation runs at the speed limit: use_speed_limit, and in Fritchii always for Ocarina
+/// of Time, whose logic speeds up with the frame rate ("Unlocked" made the game run fast).
+[[nodiscard]] bool SpeedLimitEnabled();
 
 [[nodiscard]] size_t FrameGenGenerations();
 

@@ -255,7 +255,7 @@ public:
         double trace_requested_ms{};
         double trace_sleep_ms{};
         double trace_slept_ms{};
-        if (Settings::values.use_speed_limit.GetValue() && target_fps > 0.0) {
+        if (Settings::SpeedLimitEnabled() && target_fps > 0.0) {
             auto now = std::chrono::steady_clock::now();
             if (last_target_fps != target_fps) {
                 frame_interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / target_fps));
@@ -303,7 +303,7 @@ public:
                          "cpu_wait_wall_ms={:.3f} pace_requested_ms={:.3f} "
                          "sleep_requested_ms={:.3f} sleep_actual_wall_ms={:.3f} "
                          "pace_actual_wall_ms={:.3f}",
-                         target_fps, Settings::values.use_speed_limit.GetValue(), may_flush,
+                         target_fps, Settings::SpeedLimitEnabled(), may_flush,
                          std::chrono::duration<double, std::milli>(trace_waited - trace_start).count(),
                          trace_requested_ms, trace_sleep_ms, trace_slept_ms,
                          std::chrono::duration<double, std::milli>(end - trace_waited).count());

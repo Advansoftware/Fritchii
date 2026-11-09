@@ -1830,7 +1830,7 @@ private:
                          "sleep_actual_wall_ms={:.3f} pace_wall_ms={:.3f} deadline_reset={}",
                          m_presents, w[12], w[12] >> 16, w[12] & 0xffff,
                          m_frame_trace.interval, m_frame_trace.refresh, m_frame_trace.forced,
-                         Settings::values.use_speed_limit.GetValue(), Settings::SpeedLimit(),
+                         Settings::SpeedLimitEnabled(), Settings::SpeedLimit(),
                          m_frame_trace.switches, m_frame_trace.switch_from,
                          m_frame_trace.switch_to,
                          m_frame_trace.last_present == std::chrono::steady_clock::time_point{}
@@ -1960,7 +1960,7 @@ private:
             m_frame_trace.refresh = refresh_rate;
             m_frame_trace.forced = forced_interval;
         }
-        if (!Settings::values.use_speed_limit.GetValue() || Settings::SpeedLimit() == 0) {
+        if (!Settings::SpeedLimitEnabled() || Settings::SpeedLimit() == 0) {
             VideoCommon::Nx2Perf::g_guest_frame_interval_ns.store(0, std::memory_order_relaxed);
             return;
         }

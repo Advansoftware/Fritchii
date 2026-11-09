@@ -5241,7 +5241,7 @@ void MainWindow::UpdateStatusBar() {
     res_scale_label->setText(
         tr("Scale: %1x", "%1 is the resolution scaling factor").arg(res_scale));
 
-    if (Settings::values.use_speed_limit.GetValue()) {
+    if (Settings::SpeedLimitEnabled()) {
         emu_speed_label->setText(tr("Speed: %1% / %2%")
                                      .arg(results.emulation_speed * 100.0, 0, 'f', 0)
                                      .arg(Settings::SpeedLimit()));
@@ -5511,7 +5511,7 @@ void MainWindow::SetFPSSuffix() {
         m_fpsSuffix = tr("Turbo");
         break;
     case Settings::SpeedMode::Standard:
-        const bool limited = Settings::values.use_speed_limit.GetValue();
+        const bool limited = Settings::SpeedLimitEnabled();
         m_fpsSuffix = limited ? QString{} : tr("Unlocked");
         break;
     }
