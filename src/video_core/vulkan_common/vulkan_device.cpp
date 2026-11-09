@@ -1195,8 +1195,13 @@ bool Device::GetSuitability(bool requires_swapchain) {
             return *value != '0';
         }
         const u32 vendor = properties.properties.vendorID;
-        const bool amd_windows_driver =
-            properties.driver.driverID == VK_DRIVER_ID_AMD_PROPRIETARY;
+        // Not properties.driver: it is read further down (it was 0 here, and v5.2 left the
+        // libraries on for these cards). On Windows AMD's Vulkan driver is the proprietary one.
+#ifdef _WIN32
+        constexpr bool amd_windows_driver = true;
+#else
+        constexpr bool amd_windows_driver = false;
+#endif
         if (vendor == 0x1002 && amd_windows_driver &&
             Settings::values.use_graphics_pipeline_library.GetValue()) {
             LOG_INFO(Render_Vulkan, "Nx2Perf gpl: shader libraries off on AMD's proprietary "
