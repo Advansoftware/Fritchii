@@ -83,8 +83,10 @@ public:
      * @param event            - Event used only for audio renderer, signalled on buffer consume.
      */
     SDLSinkStream(u32 device_channels_, u32 system_channels_, const std::string& output_device,
-                  const std::string& input_device, StreamType type_, Core::System& system_)
+                  const std::string& input_device, StreamType type_, Core::System& system_,
+                  const std::string& name_)
         : SinkStream{system_, type_} {
+        name = name_;
         system_channels = system_channels_;
         device_channels = device_channels_;
 
@@ -255,10 +257,10 @@ SDLSink::SDLSink(std::string_view target_device_name) {
 SDLSink::~SDLSink() = default;
 
 SinkStream* SDLSink::AcquireSinkStream(Core::System& system, u32 system_channels_,
-                                       const std::string&, StreamType type) {
+                                       const std::string& name, StreamType type) {
     system_channels = system_channels_;
     SinkStreamPtr& stream = sink_streams.emplace_back(std::make_unique<SDLSinkStream>(
-        device_channels, system_channels, output_device, input_device, type, system));
+        device_channels, system_channels, output_device, input_device, type, system, name));
     stream->SetDeviceVolume(device_volume);
     return stream.get();
 }
