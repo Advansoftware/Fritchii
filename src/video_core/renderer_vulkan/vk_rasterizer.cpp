@@ -3074,7 +3074,12 @@ void RasterizerVulkan::UpdateOcarinaJitter() {
     // half-size passes and full-screen passes (which keep the depth bound without using it, as
     // #678 found, some with depth writes on: with the test off nothing writes depth) stay put.
     const auto& regs = maxwell3d->regs;
-    if (oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr && oot_motion.extent.width != 0 &&
+    // FSR, and DLSS with EDEN_NX2_DLSS_JITTER (it is made for jittered input too).
+    const bool jittered_backend =
+        oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr ||
+        (oot_backend == VideoCommon::OcarinaUpscaleBackend::Dlss &&
+         VideoCommon::OcarinaDlssJitterMode() != 0);
+    if (jittered_backend && oot_motion.extent.width != 0 &&
         oot_dlss_frame && *oot_dlss_frame + 1 >= render_trace_frame && regs.depth_test_enable) {
         const auto& targets = texture_cache.GetRenderTargets();
         if (targets.depth_buffer_id) {

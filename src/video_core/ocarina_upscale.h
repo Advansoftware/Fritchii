@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <string_view>
 
 #include "common/settings_enums.h"
@@ -41,10 +42,25 @@ constexpr OcarinaUpscaleBackend SelectOcarinaUpscaler(Settings::OotAntiAliasing 
     return SelectOcarinaUpscaler(fsr, dlss_enabled && !fsr, dlss_available, override);
 }
 
+/// EDEN_NX2_DLSS_JITTER (boot, 0 = off): DLSS gets the camera jitter and the texture LOD bias
+/// the FSR path uses (a player's request; DLSS is made for jittered input). 1 = the jitter as FSR
+/// gets it, 2 = with its vertical sign flipped (Streamline's convention is unverified here).
+inline int OcarinaDlssJitterMode() {
+    static const int mode = [] {
+        const char* value = std::getenv("EDEN_NX2_DLSS_JITTER");
+        return value != nullptr ? std::atoi(value) : 0;
+    }();
+    return mode;
+}
+
 /// Texture LOD bias added to Ocarina's mipmapped samplers while FSR upscales. AMD recommends
-/// log2(render / output) - 1: -1.58 for docked 1440p -> 4K.
-constexpr float OcarinaFsrLodBias(OcarinaUpscaleBackend backend) {
-    return backend == OcarinaUpscaleBackend::Fsr ? -1.58f : 0.0f;
+/// log2(render / output) - 1: -1.58 for docked 1440p -> 4K. With EDEN_NX2_DLSS_JITTER, DLSS gets
+/// NVIDIA's log2(render / output): -0.58.
+inline float OcarinaFsrLodBias(OcarinaUpscaleBackend backend) {
+    if (backend == OcarinaUpscaleBackend::Fsr) {
+        return -1.58f;
+    }
+    return backend == OcarinaUpscaleBackend::Dlss && OcarinaDlssJitterMode() != 0 ? -0.58f : 0.0f;
 }
 
 /// Whether a sampler with that bias keeps it for an image: only docked (handheld isn't measured),
