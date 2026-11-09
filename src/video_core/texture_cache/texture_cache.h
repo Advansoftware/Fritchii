@@ -425,7 +425,15 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
     // integrated GPUs, whose budget is capped at 4-6 GiB) keep the 5 GiB cap.
     u64 max_critical = MaxCriticalMemory;
     if constexpr (requires { runtime.GetDeviceMemoryBudget(); }) {
-        max_critical = (std::max)(max_critical, runtime.GetDeviceMemoryBudget() / 8 * 5);
+        const u64 budget = runtime.GetDeviceMemoryBudget();
+        max_critical = (std::max)(max_critical, budget / 8 * 5);
+        // Cards with 10 GiB or more of budget: 5/8 left ~7.3 GiB on a 12 GB RX 6700 XT, under what
+        // Ocarina's Kokiri Forest keeps alive, so every aggressive pass evicted its CostlyLoad ASTC
+        // textures (a 6144x6144 5x5 one, 31 MiB) and the game re-created them ~128 frames later:
+        // a 24 ms texture stall every ~3 s. Keep 2.5 GiB of the budget for everything else instead.
+        if (budget >= 10_GiB) {
+            max_critical = (std::max)(max_critical, budget - 2560_MiB);
+        }
     }
     critical_memory = (std::min)(critical_memory, max_critical);
     expected_memory =
