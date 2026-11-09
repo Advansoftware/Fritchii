@@ -90,7 +90,16 @@ void DeviceMemory::ProbeMemory(std::stop_token stop) {
         }
         // Published for the GPU thread's line (Vulkan::LogMemoryOwners), which reads the last ones.
         static_cast<void>(buffer.SampleResident());
-        static_cast<void>(Common::SampleHeapUsage());
+        // Walking the heaps locks each one for the whole walk: the C runtime heap (~2.5 GB) took
+        // ~250 ms, and every game thread that allocated meanwhile froze, a 270 ms hitch every
+        // 10 s (2026-11-09). Only for a memory hunt: EDEN_NX2_MEM_HEAPS=1.
+        static const bool walk_heaps = [] {
+            const char* value = std::getenv("EDEN_NX2_MEM_HEAPS");
+            return value != nullptr && value[0] == '1';
+        }();
+        if (walk_heaps) {
+            static_cast<void>(Common::SampleHeapUsage());
+        }
     }
 }
 #endif
