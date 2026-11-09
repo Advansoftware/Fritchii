@@ -397,10 +397,6 @@ struct Values {
     // still overrides it.
     Setting<DlssPreset> nvidia_dlss_preset{linkage, DlssPreset::K, "nvidia_dlss_preset",
                                            Category::Renderer};
-    // AMD FSR 3.1 in place of Ocarina of Time's own upscale pass (port of zortos #1060).
-    SwitchableSetting<bool> ocarina_fsr{linkage, false, "ocarina_fsr", Category::Renderer};
-    // AMD FSR 4 in place of FSR 3.1 where FSR replaces a game's upscaler (Windows, AMD's driver).
-    SwitchableSetting<bool> amd_fsr4{linkage, false, "amd_fsr4", Category::Renderer};
     SwitchableSetting<AspectRatio, true> aspect_ratio{linkage,
                                                       AspectRatio::R16_9,
                                                       "aspect_ratio",
@@ -417,7 +413,10 @@ struct Values {
                                                   true,
                                                   true};
     // The Legend of Zelda: Ocarina of Time's own anti-aliasing network and its sharpening output
-    // pass, or the tonemapped image as the game renders it (video_core/oot_network.h).
+    // pass, the tonemapped image as the game renders it (video_core/oot_network.h), or AMD FSR 3.1
+    // or FSR 4 in place of the game's upscale pass (video_core/ocarina_upscale.h; FSR 4 needs
+    // AMD's downloaded runtime and falls back to FSR 3.1). NVIDIA DLSS keeps its own setting and,
+    // when on, still replaces Game and No sharpening; an FSR choice wins over it.
     SwitchableSetting<OotAntiAliasing> oot_anti_aliasing{linkage, OotAntiAliasing::Game,
                                                          "oot_anti_aliasing", Category::Renderer};
 

@@ -5,6 +5,8 @@
 
 #include <string_view>
 
+#include "common/settings_enums.h"
+
 namespace VideoCommon {
 
 enum class OcarinaUpscaleBackend { Native, Fsr, Dlss };
@@ -22,6 +24,21 @@ constexpr OcarinaUpscaleBackend SelectOcarinaUpscaler(bool fsr_enabled, bool dls
         return OcarinaUpscaleBackend::Dlss;
     }
     return fsr_enabled ? OcarinaUpscaleBackend::Fsr : OcarinaUpscaleBackend::Native;
+}
+
+/// Whether the "OoT anti-aliasing" choice asks for AMD FSR (3.1, or 4 with FSR 3.1 as fallback).
+constexpr bool OcarinaFsrChosen(Settings::OotAntiAliasing choice) {
+    return choice == Settings::OotAntiAliasing::Fsr3 || choice == Settings::OotAntiAliasing::Fsr4;
+}
+
+/// The backend for the "OoT anti-aliasing" choice and the NVIDIA DLSS setting. An FSR choice wins
+/// over DLSS; with Game or No sharpening, DLSS replaces the game's pass when it's on and available
+/// (as before FSR came in).
+constexpr OcarinaUpscaleBackend SelectOcarinaUpscaler(Settings::OotAntiAliasing choice,
+                                                    bool dlss_enabled, bool dlss_available,
+                                                    std::string_view override) {
+    const bool fsr = OcarinaFsrChosen(choice);
+    return SelectOcarinaUpscaler(fsr, dlss_enabled && !fsr, dlss_available, override);
 }
 
 /// Texture LOD bias added to Ocarina's mipmapped samplers while FSR upscales. AMD recommends

@@ -1105,7 +1105,7 @@ VideoCommon::OcarinaUpscaleBackend ResolveOcarinaUpscaler(const Device& device) 
     dlss_available = Streamline::IsDlssAvailable();
 #endif
     const auto backend = VideoCommon::SelectOcarinaUpscaler(
-        Settings::values.ocarina_fsr.GetValue(), Settings::values.nvidia_dlss.GetValue(),
+        Settings::values.oot_anti_aliasing.GetValue(), Settings::values.nvidia_dlss.GetValue(),
         dlss_available, value ? value : "");
     if (backend == VideoCommon::OcarinaUpscaleBackend::Fsr && !Fsr3Upscaler::IsSupported(device)) {
         return VideoCommon::OcarinaUpscaleBackend::Native;

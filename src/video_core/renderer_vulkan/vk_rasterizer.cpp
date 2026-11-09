@@ -2979,7 +2979,8 @@ bool RasterizerVulkan::OcarinaTemporalEnabled() const {
     }
     oot_backend = ResolveOcarinaUpscaler(device);
     if (*oot_backend == VideoCommon::OcarinaUpscaleBackend::Native &&
-        Settings::values.ocarina_fsr.GetValue() && !Fsr3Upscaler::IsSupported(device)) {
+        VideoCommon::OcarinaFsrChosen(Settings::values.oot_anti_aliasing.GetValue()) &&
+        !Fsr3Upscaler::IsSupported(device)) {
         LOG_WARNING(Render_Vulkan, "Ocarina FSR 3.1 unsupported on this device; using native upscale");
     }
     return *oot_backend != VideoCommon::OcarinaUpscaleBackend::Native;

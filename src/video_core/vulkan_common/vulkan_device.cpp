@@ -501,7 +501,8 @@ namespace {
 /// float16 and, on RDNA 4, float8 on the device; the emulator's shaders use neither for it.
 bool WantsAmdFsr4(VkDriverId driver_id) {
 #ifdef _WIN32
-    return driver_id == VK_DRIVER_ID_AMD_PROPRIETARY && Settings::values.amd_fsr4.GetValue();
+    return driver_id == VK_DRIVER_ID_AMD_PROPRIETARY &&
+           Settings::values.oot_anti_aliasing.GetValue() == Settings::OotAntiAliasing::Fsr4;
 #else
     return false;
 #endif

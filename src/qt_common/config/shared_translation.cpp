@@ -158,16 +158,6 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, nvidia_dlss_preset, tr("DLSS preset:"),
            tr("The DLSS model. K is the tested default; L and M are NVIDIA's newer models, J the "
               "older one. Default lets NVIDIA choose per quality mode."));
-    INSERT(Settings, ocarina_fsr, tr("Use AMD FSR 3.1 upscaling in Ocarina of Time"),
-           tr("Replaces Ocarina of Time's native upscaler using scene depth and camera motion. "
-              "Works on any supported Vulkan GPU. NVIDIA DLSS takes precedence when enabled and "
-              "available. RCAS Sharpness controls sharpening. Takes effect when a game starts."));
-    INSERT(Settings, amd_fsr4, tr("Use AMD FSR 4 in place of FSR 3.1"),
-           tr("Uses AMD's ML-based FSR 4 where FSR replaces a game's upscaler (Ocarina of Time "
-              "with the setting above). Radeon RX 6000 or newer, or a Ryzen AI processor, with a "
-              "current AMD driver.\nNeeds AMD's FidelityFX runtime, which Lichii downloads from "
-              "AMD when you ask. The files are AMD's, under AMD's licence. Without them, or if FSR 4 "
-              "can't run, FSR 3.1 is used. Takes effect when a game starts."));
     INSERT(Settings, nvidia_dlss, tr("Use NVIDIA DLSS in place of a game's DLSS (experimental)"),
            tr("Uses NVIDIA DLSS on GeForce RTX cards in place of a Switch 2 game's own DLSS, "
               "instead of AMD FSR 3.1.\nNeeds NVIDIA's Streamline loader, and NVIDIA DLSS unless "
@@ -182,8 +172,12 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, oot_anti_aliasing, tr("Ocarina of Time anti-aliasing:"),
            tr("The Legend of Zelda: Ocarina of Time only.\nGame: the game's own anti-aliasing "
               "network, which sharpens heavily.\nNo sharpening: the image as the game renders it, "
-              "without the network (faster; pairs well with a higher resolution). Has no effect while "
-              "NVIDIA DLSS is on.\nTakes effect when the game starts."));
+              "without the network (faster; pairs well with a higher resolution).\nAMD FSR 3.1: "
+              "AMD's upscaler in place of the game's, on any GPU. RCAS Sharpness sets its "
+              "sharpening.\nAMD FSR 4: AMD's newer upscaler on Radeon RX 6000 or newer and Ryzen "
+              "AI GPUs, with AMD's files (download below). Without them, FSR 3.1 runs.\nWith Game "
+              "or No sharpening, NVIDIA DLSS replaces the game's upscaler while its setting is "
+              "on.\nTakes effect when the game starts."));
     INSERT(Settings, post_shader_chain, QString(), QString());
     INSERT(Settings, post_shader_preset, QString(), QString());
     INSERT(Settings, post_shader_enabled, tr("Enable post-processing effects"),
@@ -594,6 +588,8 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                           {
                               PAIR(OotAntiAliasing, Game, tr("Game")),
                               PAIR(OotAntiAliasing, NoSharpening, tr("No sharpening")),
+                              PAIR(OotAntiAliasing, Fsr3, tr("AMD FSR 3.1")),
+                              PAIR(OotAntiAliasing, Fsr4, tr("AMD FSR 4")),
                           }});
     translations->insert({Settings::EnumMetadata<Settings::AspectRatio>::Index(),
                           {

@@ -26,6 +26,7 @@ class QPushButton;
 class QEvent;
 class QObject;
 class QComboBox;
+class AmdFsr4Panel;
 
 namespace Settings {
 enum class NvdecEmulation : u32;
@@ -111,5 +112,6 @@ private:
     QWidget* api_widget;
     QComboBox* aspect_ratio_combobox;
     QComboBox* resolution_combobox;
-    QWidget* amd_fsr4_group{}; ///< The FSR 4 setting and AmdFsr4Panel
+    QComboBox* oot_aa_combobox{};          ///< The oot_anti_aliasing choice
+    AmdFsr4Panel* amd_fsr4_panel{};       ///< Under it while AMD FSR 4 is picked
 };

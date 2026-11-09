@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Shown under the AMD FSR 4 setting: whether AMD's FidelityFX runtime is downloaded, and a button
-// that fetches it from AMD's FidelityFX SDK release on GitHub.
+// Shown under the Ocarina of Time anti-aliasing choice while AMD FSR 4 is picked: whether AMD's
+// FidelityFX runtime is downloaded, and a button that fetches it from AMD's FidelityFX SDK release
+// on GitHub.
 
 #pragma once
 

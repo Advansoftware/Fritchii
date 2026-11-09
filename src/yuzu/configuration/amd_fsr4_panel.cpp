@@ -56,8 +56,9 @@ u64 DownloadSize() {
     return total;
 }
 
-/// GETs one file of the SDK repository at the pinned commit. Empty with `error` set on failure.
-std::optional<std::string> Fetch(std::string_view entry, std::string& error,
+/// GETs one file of the SDK repository at the pinned commit, stopping past `max_size` bytes.
+/// Empty with `error` set on failure.
+std::optional<std::string> Fetch(std::string_view entry, u64 max_size, std::string& error,
                                  const std::function<bool(u64)>& progress = {}) {
     httplib::Client client{std::string{FfxRuntime::DOWNLOAD_HOST}};
     client.set_connection_timeout(30);
@@ -66,6 +67,7 @@ std::optional<std::string> Fetch(std::string_view entry, std::string& error,
     client.load_ca_cert_store(kCert, sizeof(kCert));
 #endif
     std::string body;
+    bool too_large = false;
     int status = 0;
     const auto result = client.Get(
         fmt::format("{}{}", FfxRuntime::DOWNLOAD_PATH, entry),
@@ -74,9 +76,17 @@ std::optional<std::string> Fetch(std::string_view entry, std::string& error,
             return response.status == 200;
         },
         [&](const char* data, size_t length) {
+            if (body.size() + length > max_size) {
+                too_large = true;
+                return false;
+            }
             body.append(data, length);
             return !progress || progress(body.size());
         });
+    if (too_large) {
+        error = "larger than the FidelityFX SDK file";
+        return std::nullopt;
+    }
     if (!result || status != 200) {
         error = result ? fmt::format("HTTP {}", status) : httplib::to_string(result.error());
         return std::nullopt;
@@ -178,7 +188,7 @@ void AmdFsr4Panel::Download() {
         busy.setMinimumDuration(0);
         busy.show();
         QApplication::processEvents();
-        licence = Fetch(FfxRuntime::LICENSE_ENTRY, error);
+        licence = Fetch(FfxRuntime::LICENSE_ENTRY, 1 << 20, error);
     }
     if (!licence || licence->empty()) {
         fail(error.empty() ? "could not retrieve AMD's licence text" : error);
@@ -223,11 +233,12 @@ void AmdFsr4Panel::Download() {
     const u64 total = DownloadSize();
     u64 done = 0;
     for (const FfxRuntime::File& file : FfxRuntime::FILES) {
-        const std::optional<std::string> contents = Fetch(file.entry, error, [&](u64 received) {
-            progress.setValue(static_cast<int>((done + received) * 1000 / total));
-            QApplication::processEvents();
-            return !progress.wasCanceled();
-        });
+        const std::optional<std::string> contents =
+            Fetch(file.entry, file.size, error, [&](u64 received) {
+                progress.setValue(static_cast<int>((done + received) * 1000 / total));
+                QApplication::processEvents();
+                return !progress.wasCanceled();
+            });
         if (progress.wasCanceled()) {
             return;
         }

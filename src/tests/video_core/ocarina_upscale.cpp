@@ -25,6 +25,26 @@ TEST_CASE("OoT temporal backend selection is opt-in and vendor neutral", "[video
     CHECK(SelectOcarinaUpscaler(false, false, false, "garbage") == Native);
 }
 
+TEST_CASE("OoT anti-aliasing choice picks the upscaler; DLSS keeps its setting",
+          "[video_core][ocarina]") {
+    using enum VideoCommon::OcarinaUpscaleBackend;
+    using VideoCommon::SelectOcarinaUpscaler;
+    using Settings::OotAntiAliasing;
+    // Game and No sharpening: DLSS when its setting is on and it's available, as before.
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::Game, false, true, "") == Native);
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::Game, true, true, "") == Dlss);
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::Game, true, false, "") == Native);
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::NoSharpening, true, true, "") == Dlss);
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::NoSharpening, false, false, "") == Native);
+    // An FSR choice wins over the DLSS setting.
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::Fsr3, true, true, "") == Fsr);
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::Fsr4, true, true, "") == Fsr);
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::Fsr3, false, false, "") == Fsr);
+    // The environment override still decides.
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::Fsr3, false, false, "native") == Native);
+    CHECK(SelectOcarinaUpscaler(OotAntiAliasing::Fsr4, false, true, "dlss") == Dlss);
+}
+
 TEST_CASE("OoT FSR texture LOD bias follows the upscaler, the console mode and failure",
           "[video_core][ocarina]") {
     using enum VideoCommon::OcarinaUpscaleBackend;

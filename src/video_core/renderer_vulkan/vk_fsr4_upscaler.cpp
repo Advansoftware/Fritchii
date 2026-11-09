@@ -148,7 +148,7 @@ std::optional<Provider> FindFsr4(const FfxRuntime::Api& api, const Device& devic
 } // Anonymous namespace
 
 bool Fsr4Upscaler::IsWanted(const Device& device) {
-    return Settings::values.amd_fsr4.GetValue() &&
+    return Settings::values.oot_anti_aliasing.GetValue() == Settings::OotAntiAliasing::Fsr4 &&
            device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY;
 }
 
