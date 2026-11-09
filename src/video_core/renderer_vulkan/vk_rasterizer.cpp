@@ -2129,6 +2129,7 @@ void RasterizerVulkan::DispatchCompute() {
                 cmdbuf.DispatchIndirect(indirect_buffer, indirect_offset);
             });
         });
+        buffer_cache.RecordComputeExtentProbes();
         compute_since_count_barrier = true;
         SubmitNx2ListCopies(pipeline->ShaderHash());
         return;
@@ -2187,6 +2188,7 @@ void RasterizerVulkan::DispatchCompute() {
             TextureCacheRuntime::CopyByteAddressedShadow(cmdbuf, *byte_addressed_shadow, true);
         }
     });
+    buffer_cache.RecordComputeExtentProbes();
     if (can_replace) {
         // The deferred native binding may follow DLSS's command buffer bindings.
         scheduler.InvalidateState();

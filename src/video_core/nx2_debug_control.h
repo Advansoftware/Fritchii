@@ -296,6 +296,9 @@ inline std::atomic<int> g_idle_pause{-1};
 /// collector's device memory figure, as deleted images waiting for the GPU are. Logs "Image pool
 /// (EXP42) last 600 frames" and counts pooled creates in "Slow clear texture cache". 1 is the default
 /// (LoadExperiments); 0 = off.
+/// EXP45 (live; 1 = off): the native compute write extent self-check (BufferCache::ExtentTrust,
+/// fable_answer_25): a program is marked in full until a dispatch at its dims showed its proof
+/// holds, and for good once one wrote past it (Ocarina of Time's glowing triangles, 2026-11-09).
 /// EXP43 (live; render target relocation, fable_answer_12 2A; TextureCache::JoinImages): a render
 /// target a clear overwrites whole, with no copies, aliases or remapped images among its overlaps
 /// and exactly one predecessor among its bad overlaps (an image of the same single-level,
