@@ -3847,7 +3847,17 @@ void MainWindow::OnConfigure() {
         // Cancel
         configure_dialog.ApplyConfiguration();
     } else if (UISettings::values.reset_to_defaults) {
-        LOG_INFO(Frontend, "Resetting all settings to defaults");
+        // Fritchii: the current settings are saved first (Settings > General > Restore Settings),
+        // a restore puts a saved set back, and a reset ends on Fritchii's own settings with the
+        // controls kept (2026-11-09).
+        const bool fritchii = FritchiiUi::Enabled();
+        const QString restore = std::exchange(FritchiiUi::PendingSettingsRestore(), QString{});
+        const auto old_players = Settings::values.players.GetValue(true);
+        if (fritchii) {
+            FritchiiUi::BackupSettings();
+        }
+        LOG_INFO(Frontend, "{}", restore.isEmpty() ? "Resetting all settings to defaults"
+                                                   : "Restoring saved settings");
         if (!Common::FS::RemoveFile(config->GetConfigFilePath())) {
             LOG_WARNING(Frontend, "Failed to remove configuration file");
         }
@@ -3867,11 +3877,22 @@ void MainWindow::OnConfigure() {
 
         Settings::values.disabled_addons.clear();
 
+        if (!restore.isEmpty() && !FritchiiUi::RestoreSettingsFiles(restore)) {
+            QMessageBox::warning(this, tr("Restore Settings"),
+                                 tr("Some settings could not be restored. Fritchii's defaults "
+                                    "fill the gaps."));
+        }
         config = std::make_unique<QtConfig>();
         UISettings::values.reset_to_defaults = false;
 
         UISettings::values.game_dirs = std::move(old_game_dirs);
         UISettings::values.favorited_ids = std::move(old_favorited_ids);
+        if (fritchii && restore.isEmpty()) {
+            // The tuned settings now, not at the next start (the revision went back to 0).
+            Settings::values.players.GetValue(true) = old_players;
+            MigrateFriztiSettings();
+            config->SaveAllValues();
+        }
 
         InitializeRecentFileMenuActions();
 
