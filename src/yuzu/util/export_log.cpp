@@ -13,11 +13,13 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QMap>
 #include <QMessageBox>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QScreen>
+#include <QSet>
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <QUrl>
@@ -197,6 +199,47 @@ QString SystemSummary(const std::vector<VkDeviceInfo::Record>& vk_device_records
     for (const auto* setting : settings) {
         text += Line(QString::fromStdString(setting->GetLabel()),
                      QString::fromStdString(setting->Canonicalize()));
+    }
+
+    // Ocarina's game-specific settings (right-click > Configure Game, a value with a clear button):
+    // they beat the global ones, the usual reason "my settings didn't apply" (2026-11-09).
+    text += QStringLiteral("\n== OoT game-specific settings (these beat the global ones) ==\n");
+    {
+        const auto game_ini = Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "custom" /
+                              "0400486024DEC000.ini";
+        QFile file(QString::fromStdString(Common::FS::PathToUTF8String(game_ini)));
+        QStringList overridden;
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QString section;
+            QSet<QString> own;
+            QMap<QString, QString> values_by_key;
+            while (!file.atEnd()) {
+                const QString line = QString::fromUtf8(file.readLine()).trimmed();
+                if (line.startsWith(QLatin1Char('[')) && line.endsWith(QLatin1Char(']'))) {
+                    section = line.mid(1, line.size() - 2);
+                    continue;
+                }
+                const qsizetype eq = line.indexOf(QLatin1Char('='));
+                if (eq <= 0) {
+                    continue;
+                }
+                const QString key = line.left(eq);
+                const QString value = line.mid(eq + 1);
+                if (key.endsWith(QStringLiteral("\\use_global"))) {
+                    if (value == QStringLiteral("false")) {
+                        own.insert(section + QLatin1Char('/') + key.chopped(11));
+                    }
+                } else if (!key.contains(QLatin1Char('\\'))) {
+                    values_by_key.insert(section + QLatin1Char('/') + key, value);
+                }
+            }
+            for (const QString& key : own) {
+                overridden << QStringLiteral("%1: %2").arg(key, values_by_key.value(key));
+            }
+            overridden.sort();
+        }
+        text += overridden.isEmpty() ? QStringLiteral("none") : overridden.join(QLatin1Char('\n'));
+        text += QLatin1Char('\n');
     }
 
     QStringList switches;
