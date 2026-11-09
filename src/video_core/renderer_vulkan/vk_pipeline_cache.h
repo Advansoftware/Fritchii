@@ -129,6 +129,10 @@ struct ComputePipelineCacheEntry {
     /// A rebuild still compiling: dispatches keep this entry's pipeline until it is ready
     /// (zortos293/Lichii#969).
     std::unique_ptr<ComputePipelineCacheEntry> pending;
+    /// GPU thread: frame_count at the last dispatch through this entry (EXP51 eviction)
+    u64 last_use_frame{};
+    /// Whether a dispatch went through it this session (a boot build may never be dispatched)
+    bool dispatched{};
 
     [[nodiscard]] ComputePipeline* Get(bool native, GPUVAddr address,
                                        const ComputePipelineCacheKey& key) const;
@@ -395,9 +399,12 @@ private:
 
     /// Translates the current compute program, binding the pointers in keep_pointers whatever
     /// their slots hold now (see GenericEnvironment::KeepStoragePointers)
+    /// `store` false: the program is in the disk cache already (one EXP51 evicted), so no record
+    /// is appended for it.
     ComputePipelineCacheEntry CreateComputePipeline(const ComputePipelineCacheKey& key,
                                                     const ShaderInfo* shader,
-                                                    std::span<const u64> keep_pointers = {});
+                                                    std::span<const u64> keep_pointers = {},
+                                                    bool store = true);
 
     /// A compute translation's SPIR-V and serialized info (the precompiled preparation keeps
     /// them; its audit compares them). With translate_only no pipeline is made.
@@ -549,6 +556,17 @@ private:
     /// Replaced compute pipelines, destroyed once the GPU and their queued build are done with
     /// them (tick, pipeline)
     std::deque<std::pair<u64, std::unique_ptr<ComputePipeline>>> retired_compute_pipelines;
+    /// EXP51: destroys compute pipelines unused for a while (through retired_compute_pipelines).
+    void EvictUnusedComputePipelines(int mode);
+    /// What an evicted compute entry learned, kept so its next dispatch translates it as it was
+    /// (the pointers it bound, the rebuilds it used) without a new disk cache record.
+    struct EvictedCompute {
+        std::vector<u64> mapped_pointers;
+        u32 rebuilds{};
+    };
+    ::Common::unordered_map<ComputePipelineCacheKey, EvictedCompute> evicted_compute;
+    size_t compute_evicted_total{};       ///< EXP51 evictions this session
+    size_t compute_rebuilt_after_evict{}; ///< Evicted compute programs dispatched again
     ::Common::unordered_map<GraphicsPipelineCacheKey, std::unique_ptr<GraphicsPipeline>> graphics_cache;
 
     ShaderPools main_pools;
