@@ -339,6 +339,14 @@ bool FixedPipelineState::DualSourceBlend(const Maxwell& regs) noexcept {
     return ComputeAttachment0DualSourceBlend(regs);
 }
 
+Maxwell::PrimitiveTopology FixedPipelineState::KeyTopology(Maxwell::PrimitiveTopology topology,
+                                                           bool collapse_class) noexcept {
+    const size_t index = static_cast<size_t>(topology);
+    return collapse_class && index < TOPOLOGY_CLASS_REPRESENTATIVE_LUT.size()
+               ? TOPOLOGY_CLASS_REPRESENTATIVE_LUT[index]
+               : topology;
+}
+
 void FixedPipelineState::BlendingAttachment::Refresh(const Maxwell& regs, size_t index) {
     const auto& mask = regs.color_mask[regs.color_mask_common ? 0 : index];
 

@@ -283,6 +283,11 @@ struct FixedPipelineState {
     /// attachment0_dual_source_blend as Refresh computes it.
     [[nodiscard]] static bool DualSourceBlend(const Maxwell& regs) noexcept;
 
+    /// The topology Refresh stores in the key with extended dynamic state 1 and 2: its class's
+    /// representative (all triangle kinds are Triangles), the topology itself otherwise.
+    [[nodiscard]] static Maxwell::PrimitiveTopology KeyTopology(Maxwell::PrimitiveTopology topology,
+                                                                bool collapse_class) noexcept;
+
     /// Native (Switch 2) pipelines: clears state that cannot change the pipeline, so draws that
     /// differ only there share one and precompiled keys match them: attribute types of inputs the
     /// vertex program does not read (vertex input is dynamic), blend equations and factors of

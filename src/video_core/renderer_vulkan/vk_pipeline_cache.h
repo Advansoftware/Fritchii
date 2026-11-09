@@ -257,6 +257,9 @@ private:
         /// other flags / topology / engine hint / dual-source bit, watched registers. With EXP52
         /// on, programs count only when nothing else is in the way, which never refreshes.
         std::array<u64, 5> miss_reasons{};
+        /// miss_reasons[3] ("other state") by its first differing part: vertex input, viewport
+        /// swizzles, topology, engine state, dual-source blend.
+        std::array<u64, 5> other_parts{};
         std::chrono::steady_clock::time_point last_log{};
     } clean;
 

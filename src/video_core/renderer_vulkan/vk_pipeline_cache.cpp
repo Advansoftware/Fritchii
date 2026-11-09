@@ -2233,6 +2233,22 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
     const bool patch_vertex_input =
         patch && vertex_input_dirty && dynamic_features.has_dynamic_vertex_input;
     // The first reason the last Refresh's key may not stand (index into clean.miss_reasons),
+    // EDEN_NX2_EXP54 (live, 0 = off): with extended dynamic state 1 and 2 the key holds only the
+    // topology's class (FixedPipelineState::KeyTopology) and the draw sets the topology itself, so
+    // a strip after a list keeps the pipeline. Off: any raw topology change refreshes.
+    const auto topology_differs = [&] {
+        const auto now = maxwell3d->draw_manager.draw_state.topology;
+        if (clean.topology == now) {
+            return false;
+        }
+        const bool collapse = graphics_key.state.extended_dynamic_state != 0 &&
+                              graphics_key.state.extended_dynamic_state_2 != 0;
+        if (!collapse || VideoCore::Nx2Debug::Experiment(54) == 0) {
+            return true;
+        }
+        return FixedPipelineState::KeyTopology(clean.topology, true) !=
+               FixedPipelineState::KeyTopology(now, true);
+    };
     // -1 = none.
     int miss = -1;
     // With EXP52 a change of programs is no reason by itself: the other checks decide.
@@ -2245,12 +2261,21 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
     } else if (blending_dirty && !patch_blending && !by_value) {
         miss = 2;
     } else if ((vertex_input_dirty && !patch_vertex_input) || flags[Dirty::ViewportSwizzles] ||
-               clean.topology != maxwell3d->draw_manager.draw_state.topology ||
+               topology_differs() ||
                clean.engine_state != maxwell3d->engine_state ||
                (patch && !by_value &&
                 FixedPipelineState::DualSourceBlend(maxwell3d->regs) !=
                     (graphics_key.state.attachment0_dual_source_blend != 0))) {
         miss = 3;
+        // Which part of "other state" (fable52_answer_2 Q3: the key holds the topology's class
+        // under EDS1+2, this compares the raw topology): counted only, the first that differs.
+        const size_t part =
+            (vertex_input_dirty && !patch_vertex_input) ? 0
+            : flags[Dirty::ViewportSwizzles]           ? 1
+            : topology_differs()                                             ? 2
+            : clean.engine_state != maxwell3d->engine_state                 ? 3
+                                                                            : 4;
+        ++clean.other_parts[part];
     } else if (!CleanInputsUnchanged()) {
         miss = 4;
     }
@@ -2300,7 +2325,8 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
                      "EDEN_NX2_PIPELINE_CLEAN per second: lookups without Refresh {} (patched "
                      "{}, saved by the blend value check (EXP50{}) {}, programs only (EXP52={}) "
                      "{}{}), with Refresh {} (pipeline changed {}, programs {}, blend flag {}, "
-                     "other state {}, registers {})",
+                     "other state {} [vertex input {}, swizzles {}, topology {}, engine state {}, "
+                     "dual source {}], registers {})",
                      per_second(clean.hits), per_second(clean.patches), by_value ? " on" : " off",
                      per_second(clean.blend_saved), programs_mode,
                      per_second(clean.programs_only),
@@ -2310,7 +2336,11 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
                                        clean.programs_mismatches)
                          : std::string{},
                      per_second(clean.misses), per_second(reasons[0]), per_second(reasons[1]),
-                     per_second(reasons[2]), per_second(reasons[3]), per_second(reasons[4]));
+                     per_second(reasons[2]), per_second(reasons[3]),
+                     per_second(clean.other_parts[0]), per_second(clean.other_parts[1]),
+                     per_second(clean.other_parts[2]), per_second(clean.other_parts[3]),
+                     per_second(clean.other_parts[4]), per_second(reasons[4]));
+            clean.other_parts = {};
             clean.last_log = now;
             clean.hits = 0;
             clean.patches = 0;
