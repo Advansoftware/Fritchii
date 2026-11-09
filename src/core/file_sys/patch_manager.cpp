@@ -65,8 +65,8 @@ struct BuiltinPatch {
     /// When set, the patch applies only while this environment variable is 1 (A/B before it
     /// becomes a default).
     const char* enable_env = nullptr;
-    /// When set, this environment variable at 1 skips the patch (an A/B without touching the
-    /// player's Add-Ons).
+    /// When set, this environment variable at 1 skips the patch and at 0 applies it even when
+    /// Add-Ons has it off (A/B runs without touching the player's Add-Ons).
     const char* disable_env = nullptr;
 };
 
@@ -594,16 +594,17 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
                 continue;
             }
         }
-        if (std::find(disabled.cbegin(), disabled.cend(), patch.name) != disabled.cend()) {
-            LOG_INFO(Loader, "    - Skipping \"{}\": disabled in Add-Ons", patch.name);
+        // disable_env=1 skips the patch, =0 applies it even when Add-Ons has it off (A/B runs).
+        const char* const ab_value = patch.disable_env ? std::getenv(patch.disable_env) : nullptr;
+        const std::string_view ab{ab_value ? ab_value : ""};
+        if (ab == "1") {
+            LOG_INFO(Loader, "    - Skipping \"{}\": {}=1", patch.name, patch.disable_env);
             continue;
         }
-        if (patch.disable_env != nullptr) {
-            if (const char* const value = std::getenv(patch.disable_env);
-                value != nullptr && std::string_view{value} == "1") {
-                LOG_INFO(Loader, "    - Skipping \"{}\": {}=1", patch.name, patch.disable_env);
-                continue;
-            }
+        if (ab != "0" &&
+            std::find(disabled.cbegin(), disabled.cend(), patch.name) != disabled.cend()) {
+            LOG_INFO(Loader, "    - Skipping \"{}\": disabled in Add-Ons", patch.name);
+            continue;
         }
         if (patch.build_id != build_id) {
             LOG_INFO(Loader, "    - Skipping \"{}\": build id {} is not {}", patch.name, build_id,
