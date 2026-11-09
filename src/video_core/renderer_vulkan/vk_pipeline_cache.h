@@ -201,12 +201,16 @@ private:
 
     /// EDEN_NX2_PIPELINE_CLEAN / EDEN_NX2_EXP19: CurrentGraphicsPipeline without
     /// FixedPipelineState::Refresh nor the key comparison while nothing Refresh reads changed
-    /// since the last lookup. `patch`: EXP19=2.
+    /// since the last lookup. `patch`: EXP19=2. With EXP50 the blend registers are compared by
+    /// what they make (FixedPipelineState::BlendingMatches), not word for word.
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipelineClean(bool patch);
     /// The registers Refresh reads with these features, as (first word, words) ranges.
-    void BuildCleanWatch(bool patch);
+    /// `blend_by_value` (EXP50): the blend registers go to their own ranges.
+    void BuildCleanWatch(bool patch, bool blend_by_value);
     [[nodiscard]] bool CleanInputsUnchanged() const;
     void TakeCleanSnapshot();
+    [[nodiscard]] bool CleanBlendUnchanged() const;
+    void TakeCleanBlendSnapshot();
 
     struct CleanLookup {
         struct Range {
@@ -215,10 +219,16 @@ private:
         };
         bool built{};
         bool patch{};                  ///< Built for CurrentGraphicsPipelineClean(true)
+        bool blend_by_value{};         ///< Built for EXP50: blend registers in blend_ranges
         std::vector<Range> ranges;     ///< Read by every Refresh
         std::vector<Range> xfb_ranges; ///< Read while transform feedback is enabled
+        /// With blend_by_value: the registers the attachments and the dual-source bit come from.
+        std::vector<Range> blend_ranges;
         std::vector<u32> snapshot;     ///< ranges' words at the last Refresh
         std::vector<u32> xfb_snapshot;
+        /// blend_ranges' words the key's attachments and dual-source bit were last made from (or
+        /// proved equal to, by value).
+        std::vector<u32> blend_snapshot;
         std::array<u64, 6> hashes{};   ///< graphics_key.unique_hashes at the last Refresh
         const Tegra::Engines::Maxwell3D* maxwell3d{};
         Maxwell::PrimitiveTopology topology{};
@@ -228,6 +238,12 @@ private:
         u64 hits{};
         u64 patches{};
         u64 misses{};
+        /// Hits the old check would have refreshed: blend registers or Dirty::Blending moved
+        /// while the state they make stayed the same (EXP50).
+        u64 blend_saved{};
+        /// Why lookups refreshed: pipeline changed or unknown, programs, Dirty::Blending,
+        /// other flags / topology / engine hint / dual-source bit, watched registers.
+        std::array<u64, 5> miss_reasons{};
         std::chrono::steady_clock::time_point last_log{};
     } clean;
 

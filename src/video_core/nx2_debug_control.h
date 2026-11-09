@@ -125,6 +125,14 @@ inline std::atomic<int> g_idle_pause{-1};
 /// EXP19 (graphics pipeline lookup without Refresh, PipelineCache::CurrentGraphicsPipelineClean):
 /// 1 = as EDEN_NX2_PIPELINE_CLEAN=1, 2 = also #641's patches (blend registers left to the
 /// dual-source bit and Dirty::Blending, attribute types redone alone under Dirty::VertexInput).
+/// EXP50 (live; with EXP19 / EDEN_NX2_PIPELINE_CLEAN on; after the-cashman's fix in
+/// zortos293/Lichii#717): 1 = the blend registers leave the clean lookup's word compare and
+/// Dirty::Blending is not looked at; when they moved since the key was made, the attachments
+/// RefreshBlending would build from them (FixedPipelineState::BlendingMatches) and the
+/// dual-source bit are compared with the key's: equal keeps the pipeline without a Refresh,
+/// different patches only the blend part of the key. Reads the registers, so #679's writes
+/// without the flag are still caught. Logs "saved by the blend value check" and why the other
+/// lookups refreshed in "EDEN_NX2_PIPELINE_CLEAN per second". Off by default, not measured yet.
 /// EXP22 (split ring traffic, zortos293/Lichii#641; gpu_split.h DeltaWrite and DrawBatch), bits:
 /// 1 = 3D state writes that went as Direct macro writes or (EDEN_NX2_RING_PAIRS) as pairs go in
 /// StateDelta blocks, applied in one loop (FRONT_STATE, without its per-register merge),

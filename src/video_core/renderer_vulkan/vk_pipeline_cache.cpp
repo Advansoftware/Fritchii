@@ -1881,7 +1881,7 @@ int PipelineCleanMode() {
 }
 } // Anonymous namespace
 
-void PipelineCache::BuildCleanWatch(bool patch) {
+void PipelineCache::BuildCleanWatch(bool patch, bool blend_by_value) {
     using Range = CleanLookup::Range;
     const Maxwell& regs = maxwell3d->regs;
     const DynamicFeatures& features = dynamic_features;
@@ -1894,6 +1894,8 @@ void PipelineCache::BuildCleanWatch(bool patch) {
     };
     std::vector<Range> ranges;
     const auto watch = [&](const auto& field) { watch_into(ranges, field); };
+    std::vector<Range> blend_ranges;
+    const auto watch_blend = [&](const auto& field) { watch_into(blend_ranges, field); };
 
     // Every register FixedPipelineState::Refresh (and what it calls) reads with these features.
     // With `patch`, the blend registers are left out (the dual-source bit is compared instead,
@@ -1906,7 +1908,12 @@ void PipelineCache::BuildCleanWatch(bool patch) {
     watch(regs.tessellation);
     watch(regs.patch_vertices);
     watch(regs.anti_alias_samples_mode);
-    if (!patch) {
+    if (blend_by_value) {
+        // EXP50: the blend registers are compared by the state they make when they moved.
+        watch_blend(regs.blend);                    // ComputeAttachment0DualSourceBlend
+        watch_blend(regs.blend_per_target_enabled); // ComputeAttachment0DualSourceBlend
+        watch_blend(regs.blend_per_target[0]);      // ComputeAttachment0DualSourceBlend
+    } else if (!patch) {
         watch(regs.blend);                    // ComputeAttachment0DualSourceBlend
         watch(regs.blend_per_target_enabled); // ComputeAttachment0DualSourceBlend
         watch(regs.blend_per_target[0]);      // ComputeAttachment0DualSourceBlend
@@ -1979,12 +1986,19 @@ void PipelineCache::BuildCleanWatch(bool patch) {
     }
     // Dirty::Blending, BlendingAttachment::Refresh (no extended dynamic state 3 blending):
     if (!features.has_extended_dynamic_state_3_blend) {
-        if (!patch) {
-            watch(regs.color_mask_common);
-            watch(regs.color_mask);
-            watch(regs.blend_per_target);
+        if (blend_by_value) {
+            watch_blend(regs.color_mask_common);
+            watch_blend(regs.color_mask);
+            watch_blend(regs.blend_per_target);
+            watch_blend(regs.iterated_blend);
+        } else {
+            if (!patch) {
+                watch(regs.color_mask_common);
+                watch(regs.color_mask);
+                watch(regs.blend_per_target);
+            }
+            watch(regs.iterated_blend); // No dirty flag
         }
-        watch(regs.iterated_blend); // No dirty flag
     }
     // DynamicState::Refresh3:
     if (!features.has_dynamic_state3_logic_op_enable) {
@@ -2029,12 +2043,43 @@ void PipelineCache::BuildCleanWatch(bool patch) {
         xfb_words += range.count;
     }
     clean.xfb_snapshot.assign(xfb_words, 0);
+    clean.blend_ranges = merge(std::move(blend_ranges));
+    size_t blend_words = 0;
+    for (const Range& range : clean.blend_ranges) {
+        blend_words += range.count;
+    }
+    clean.blend_snapshot.assign(blend_words, 0);
     clean.built = true;
     clean.patch = patch;
+    clean.blend_by_value = blend_by_value;
     clean.pipeline = nullptr;
     LOG_INFO(Render_Vulkan,
-             "EDEN_NX2_PIPELINE_CLEAN: watching {} register words in {} ranges{}", words,
-             clean.ranges.size(), patch ? " (with patches)" : "");
+             "EDEN_NX2_PIPELINE_CLEAN: watching {} register words in {} ranges{}{}", words,
+             clean.ranges.size(), patch ? " (with patches)" : "",
+             blend_by_value ? fmt::format(", {} blend words compared by value (EXP50)",
+                                          blend_words)
+                            : std::string{});
+}
+
+bool PipelineCache::CleanBlendUnchanged() const {
+    const u32* const words = maxwell3d->regs.reg_array.data();
+    const u32* saved = clean.blend_snapshot.data();
+    for (const CleanLookup::Range& range : clean.blend_ranges) {
+        if (std::memcmp(words + range.first, saved, range.count * sizeof(u32)) != 0) {
+            return false;
+        }
+        saved += range.count;
+    }
+    return true;
+}
+
+void PipelineCache::TakeCleanBlendSnapshot() {
+    const u32* const words = maxwell3d->regs.reg_array.data();
+    u32* saved = clean.blend_snapshot.data();
+    for (const CleanLookup::Range& range : clean.blend_ranges) {
+        std::memcpy(saved, words + range.first, range.count * sizeof(u32));
+        saved += range.count;
+    }
 }
 
 bool PipelineCache::CleanInputsUnchanged() const {
@@ -2072,6 +2117,7 @@ void PipelineCache::TakeCleanSnapshot() {
             saved += range.count;
         }
     }
+    TakeCleanBlendSnapshot(); // No ranges unless blend_by_value
     clean.hashes = graphics_key.unique_hashes;
     clean.maxwell3d = maxwell3d;
     clean.topology = maxwell3d->draw_manager.draw_state.topology;
@@ -2088,34 +2134,78 @@ void PipelineCache::TakeCleanSnapshot() {
 // With `patch` (zortos293/Lichii#641): the dual-source blend bit is compared instead of the blend
 // registers, and a raised VertexInput (dynamic vertex input) or Blending flag redoes only that
 // part of the key, which Next then looks up.
+// With EXP50 (blend by value, after the-cashman's fix in zortos293/Lichii#717): the blend
+// registers (clean.blend_ranges) leave the word compare and Dirty::Blending is not looked at.
+// While those words equal the ones the key's attachments and dual-source bit were made from (or
+// last proved equal to), the key stands. When they moved, the attachments RefreshBlending would
+// build (canonical as RefreshGraphicsKey makes them) and the dual-source bit are compared with
+// the key's: equal is a hit, different patches only that part of the key, which Next looks up.
+// The compare reads the registers, so blend writes that never raise the flag (#679) are seen.
 GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
     if (!RefreshStages(graphics_key.unique_hashes)) {
         current_pipeline = nullptr;
         clean.pipeline = nullptr;
         return nullptr;
     }
-    if (!clean.built || clean.patch != patch) {
-        BuildCleanWatch(patch);
+    const bool by_value = VideoCore::Nx2Debug::Experiment(50) != 0;
+    if (!clean.built || clean.patch != patch || clean.blend_by_value != by_value) {
+        BuildCleanWatch(patch, by_value);
     }
-    const auto& flags = maxwell3d->dirty.flags;
-    const bool blending_dirty =
-        !dynamic_features.has_extended_dynamic_state_3_blend && flags[Dirty::Blending];
+    auto& flags = maxwell3d->dirty.flags;
+    const bool dynamic_blend = dynamic_features.has_extended_dynamic_state_3_blend;
+    const bool blending_dirty = !dynamic_blend && flags[Dirty::Blending];
     const bool vertex_input_dirty = flags[Dirty::VertexInput];
-    const bool patch_blending = patch && blending_dirty;
+    const bool patch_blending = patch && !by_value && blending_dirty;
     const bool patch_vertex_input =
         patch && vertex_input_dirty && dynamic_features.has_dynamic_vertex_input;
-    if (clean.pipeline != nullptr && clean.pipeline == current_pipeline &&
-        clean.maxwell3d == maxwell3d && (!vertex_input_dirty || patch_vertex_input) &&
-        !flags[Dirty::ViewportSwizzles] && (!blending_dirty || patch_blending) &&
-        clean.hashes == graphics_key.unique_hashes &&
-        clean.topology == maxwell3d->draw_manager.draw_state.topology &&
-        clean.engine_state == maxwell3d->engine_state &&
-        (!patch || FixedPipelineState::DualSourceBlend(maxwell3d->regs) ==
-                       (graphics_key.state.attachment0_dual_source_blend != 0)) &&
-        CleanInputsUnchanged()) {
+    // The first reason the last Refresh's key may not stand (index into clean.miss_reasons),
+    // -1 = none.
+    int miss = -1;
+    if (clean.pipeline == nullptr || clean.pipeline != current_pipeline ||
+        clean.maxwell3d != maxwell3d) {
+        miss = 0;
+    } else if (clean.hashes != graphics_key.unique_hashes) {
+        miss = 1;
+    } else if (blending_dirty && !patch_blending && !by_value) {
+        miss = 2;
+    } else if ((vertex_input_dirty && !patch_vertex_input) || flags[Dirty::ViewportSwizzles] ||
+               clean.topology != maxwell3d->draw_manager.draw_state.topology ||
+               clean.engine_state != maxwell3d->engine_state ||
+               (patch && !by_value &&
+                FixedPipelineState::DualSourceBlend(maxwell3d->regs) !=
+                    (graphics_key.state.attachment0_dual_source_blend != 0))) {
+        miss = 3;
+    } else if (!CleanInputsUnchanged()) {
+        miss = 4;
+    }
+    bool patch_blend_value = false;
+    if (miss < 0) {
         ++clean.hits;
+        if (by_value) {
+            if (!CleanBlendUnchanged()) {
+                const Maxwell& regs = maxwell3d->regs;
+                const bool canonical =
+                    canonical_keys && maxwell3d->GetNativeMacroEngine().native_turing;
+                if (FixedPipelineState::DualSourceBlend(regs) ==
+                        (graphics_key.state.attachment0_dual_source_blend != 0) &&
+                    (dynamic_blend || graphics_key.state.BlendingMatches(regs, canonical))) {
+                    // Moved, but to registers that make the same state: the key stands for them.
+                    TakeCleanBlendSnapshot();
+                    ++clean.blend_saved;
+                } else {
+                    patch_blend_value = true;
+                }
+            } else if (blending_dirty) {
+                ++clean.blend_saved;
+            }
+            if (blending_dirty && !patch_blend_value) {
+                // As RefreshBlending: the key's attachments are what the registers make.
+                flags[Dirty::Blending] = false;
+            }
+        }
     } else {
         ++clean.misses;
+        ++clean.miss_reasons[static_cast<size_t>(miss)];
         clean.pipeline = nullptr;
     }
     if (((clean.hits + clean.misses) & 0xfff) == 0) {
@@ -2124,20 +2214,29 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
             clean.last_log = now;
         } else if (now - clean.last_log >= std::chrono::seconds{10}) {
             const double seconds = std::chrono::duration<double>(now - clean.last_log).count();
+            const auto per_second = [seconds](u64 count) {
+                return static_cast<u64>(static_cast<double>(count) / seconds);
+            };
+            const auto& reasons = clean.miss_reasons;
             LOG_INFO(Render_Vulkan,
                      "EDEN_NX2_PIPELINE_CLEAN per second: lookups without Refresh {} (patched "
-                     "{}), with Refresh {}",
-                     static_cast<u64>(static_cast<double>(clean.hits) / seconds),
-                     static_cast<u64>(static_cast<double>(clean.patches) / seconds),
-                     static_cast<u64>(static_cast<double>(clean.misses) / seconds));
+                     "{}, saved by the blend value check (EXP50{}) {}), with Refresh {} "
+                     "(pipeline changed {}, programs {}, blend flag {}, other state {}, "
+                     "registers {})",
+                     per_second(clean.hits), per_second(clean.patches), by_value ? " on" : " off",
+                     per_second(clean.blend_saved), per_second(clean.misses),
+                     per_second(reasons[0]), per_second(reasons[1]), per_second(reasons[2]),
+                     per_second(reasons[3]), per_second(reasons[4]));
             clean.last_log = now;
             clean.hits = 0;
             clean.patches = 0;
             clean.misses = 0;
+            clean.blend_saved = 0;
+            clean.miss_reasons = {};
         }
     }
     if (clean.pipeline != nullptr) {
-        if (!patch_blending && !patch_vertex_input) {
+        if (!patch_blending && !patch_vertex_input && !patch_blend_value) {
             current_pipeline->MarkUsed(frame_count);
             return BuiltPipeline(current_pipeline);
         }
@@ -2150,11 +2249,17 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
             graphics_key.state.attribute_types = VideoCommon::KeyedAttributeTypes(
                 vertex_attribute_types, graphics_key.unique_hashes, vertex_attribute_masks);
         }
-        if (patch_blending) {
-            graphics_key.state.RefreshBlending(*maxwell3d);
+        if (patch_blending || patch_blend_value) {
+            // EXP19=2 compared the dual-source bit above; EXP50 may find it moved.
+            graphics_key.state.attachment0_dual_source_blend.Assign(
+                FixedPipelineState::DualSourceBlend(maxwell3d->regs) ? 1 : 0);
+            if (!dynamic_blend) {
+                graphics_key.state.RefreshBlending(*maxwell3d);
+            }
             if (canonical_keys && maxwell3d->GetNativeMacroEngine().native_turing) {
                 CanonicalizeKeyState(graphics_key.state, dynamic_features);
             }
+            TakeCleanBlendSnapshot(); // No ranges unless by_value
         }
     } else {
         TakeCleanSnapshot();
