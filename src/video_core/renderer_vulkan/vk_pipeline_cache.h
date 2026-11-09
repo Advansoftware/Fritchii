@@ -522,6 +522,8 @@ private:
     /// The pipeline cache warm-up builds go through: none by default, so the tens of thousands
     /// of warm-up programs stay in the driver's disk cache and out of vulkan_pipelines.bin (which
     /// is loaded into memory at every boot). EDEN_NX2_WARM_APP_CACHE=1 uses ours.
+    /// The cache a pipeline built in play goes to (EDEN_NX2_AMD_APP_CACHE rules).
+    [[nodiscard]] vk::PipelineCache& PlayPipelineCache();
     [[nodiscard]] vk::PipelineCache& WarmPipelineCache();
     vk::PipelineCache no_pipeline_cache;
 

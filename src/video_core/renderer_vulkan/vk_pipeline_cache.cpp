@@ -642,6 +642,18 @@ std::filesystem::path SessionMarkerPath() {
     return Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) / "pipeline_cache_open.flag";
 }
 
+/// EDEN_NX2_AMD_APP_CACHE=1 (boot, off): on AMD's own driver keep our VkPipelineCache file too,
+/// for what play builds (boot rebuilds of earlier sessions' pipelines included), not the
+/// preparation's ~120k. A player's driver cache kept ~44% of a preparation and nothing visible
+/// across a restart (fable52_answer_3, fix 2).
+bool AmdAppCache(const Device& device) {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_AMD_APP_CACHE");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled && device.GetDriverID() == VK_DRIVER_ID_AMD_PROPRIETARY;
+}
+
 bool DriverCachesPipelines(const Device& device) {
     switch (device.GetDriverID()) {
     case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
@@ -667,7 +679,7 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
       texture_cache{texture_cache_}, shader_notify{shader_notify_},
       use_asynchronous_shaders{Settings::values.use_asynchronous_shaders.GetValue()},
       use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue() &&
-                                !DriverCachesPipelines(device_)},
+                                (!DriverCachesPipelines(device_) || AmdAppCache(device_))},
       oot_visual_workaround{[] {
           const char* value = std::getenv("EDEN_NX2_OOT_VISUAL_WORKAROUND");
           return value != nullptr && std::string_view{value} == "1";
@@ -2738,6 +2750,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         }
         std::ofstream{marker} << "open";
         LogDriverCacheFolder(device, "at boot");
+        LOG_INFO(Render_Vulkan, "Our VkPipelineCache file: {}",
+                 !use_vulkan_pipeline_cache  ? "off (the driver's own cache only)"
+                 : AmdAppCache(device)        ? "on for pipelines built in play "
+                                                "(EDEN_NX2_AMD_APP_CACHE, up to 512 MiB)"
+                                              : "on");
         LOG_INFO(Render_Vulkan, "VK_KHR_pipeline_binary: {}",
                  device.GetAvailableExtensions().contains("VK_KHR_pipeline_binary")
                      ? "offered by the driver"
@@ -5119,7 +5136,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreatePrecompiledGraphicsPipeli
         .library_cache = libraries ? &graphics_libraries : nullptr,
     };
     auto pipeline = std::make_unique<GraphicsPipeline>(
-        scheduler, buffer_cache, texture_cache, vulkan_pipeline_cache, &shader_notify, device,
+        scheduler, buffer_cache, texture_cache, PlayPipelineCache(), &shader_notify, device,
         descriptor_pool, guest_descriptor_queue, descriptor_buffer_ring, &workers, nullptr,
         render_pass_cache, graphics_key, std::array<vk::ShaderModule, Maxwell::MaxShaderStage>{},
         info_ptrs, std::move(emit_stages), library_params);
@@ -5221,7 +5238,7 @@ ComputePipelineCacheEntry PipelineCache::CreatePrecompiledComputePipeline(
     };
     ComputePipelineCacheEntry entry{
         .pipeline = std::make_unique<ComputePipeline>(
-            device, scheduler, vulkan_pipeline_cache, descriptor_pool, guest_descriptor_queue,
+            device, scheduler, PlayPipelineCache(), descriptor_pool, guest_descriptor_queue,
             descriptor_buffer_ring, &workers, nullptr, &shader_notify, *info, vk::ShaderModule{},
             key.unique_hash, std::move(make_module)),
         // The live environment answered the same questions, as the translation would have.
@@ -5322,6 +5339,21 @@ void PipelineCache::ReportPrecompiled() {
     stats.misses.clear();
     stats.bytes_at_window = bytes_total;
     stats.window = now;
+}
+
+vk::PipelineCache& PipelineCache::PlayPipelineCache() {
+    // The preparation's builds only go to the driver's own cache: the app cache would grow by
+    // gigabytes. With EDEN_NX2_AMD_APP_CACHE, past 512 MiB no new pipeline goes into it either
+    // (a VkPipelineCache can't evict; the file is read into RAM at every boot).
+    constexpr size_t AmdAppCacheCap = size_t{512} << 20;
+    if (t_precompile_build && AmdAppCache(device)) {
+        return no_pipeline_cache;
+    }
+    if (AmdAppCache(device) &&
+        last_cache_size.load(std::memory_order_relaxed) >= AmdAppCacheCap) {
+        return no_pipeline_cache;
+    }
+    return vulkan_pipeline_cache;
 }
 
 vk::PipelineCache& PipelineCache::WarmPipelineCache() {
@@ -6601,7 +6633,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     };
     return std::make_unique<GraphicsPipeline>(
         scheduler, buffer_cache, texture_cache,
-        libraries_only ? WarmPipelineCache() : vulkan_pipeline_cache,
+        libraries_only ? WarmPipelineCache() : PlayPipelineCache(),
         libraries_only || t_precompile_build ? nullptr : &shader_notify, device, descriptor_pool,
         guest_descriptor_queue, descriptor_buffer_ring, thread_worker, statistics,
         render_pass_cache, key, std::move(modules), infos, std::move(emit_stages),
@@ -7285,7 +7317,7 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
         pools.inst.Free();
     }
     return {.pipeline = std::make_unique<ComputePipeline>(
-                device, scheduler, warm ? WarmPipelineCache() : vulkan_pipeline_cache,
+                device, scheduler, warm ? WarmPipelineCache() : PlayPipelineCache(),
                 descriptor_pool, guest_descriptor_queue,
                 descriptor_buffer_ring, thread_worker, statistics,
                 warm ? nullptr : &shader_notify, info,
