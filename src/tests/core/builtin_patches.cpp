@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -252,4 +253,79 @@ TEST_CASE("Built-in patches preserve user overrides on already-patched input", "
     expected[RoutineLastByte] = UserByte;
     const auto patched = context.Manager().PatchNSO(nso, "main");
     REQUIRE(std::ranges::equal(patched, expected));
+}
+
+TEST_CASE("High refresh rate built-in replaces Dark's routine only while its setting is on",
+          "[patch_manager]") {
+    constexpr std::string_view HighRefresh = "High refresh rate (built-in, experimental)";
+    constexpr std::string_view DynamicFps = "Dynamic FPS by Dark (built-in)";
+    constexpr size_t Code = sizeof(Loader::NSOHeader);
+    constexpr size_t Routine = Code + 0x3C46200;
+    constexpr size_t CallOffset = Code + 0x6E6CC4;
+    constexpr std::array<u8, 4> DynamicCall{0x4F, 0x7D, 0xD5, 0x94};
+    constexpr u32 DarkThreshold = 0x3F83D70A; // Dark's routine +0x74: 1.03f
+    const auto word_at = [](const std::vector<u8>& nso, size_t offset) {
+        u32 word;
+        std::memcpy(&word, nso.data() + offset, sizeof(word));
+        return word;
+    };
+    const auto listed = [](const FileSys::PatchManager& manager, std::string_view name) {
+        const auto patches = manager.GetPatches();
+        return std::ranges::find(patches, name, &FileSys::Patch::name) != patches.end();
+    };
+    struct RestoreSetting {
+        ~RestoreSetting() {
+            Settings::values.oot_high_refresh.SetValue(false);
+        }
+    } restore;
+
+    PatchManagerTestContext context;
+    auto nso = MakeMain(OcarinaBuildId, NopInstruction);
+    nso.resize(Routine + 0x100);
+
+    SECTION("Off: Dark's routine as before, nothing past it, not listed") {
+        Settings::values.oot_high_refresh.SetValue(false);
+        const auto patched = context.Manager().PatchNSO(nso, "main");
+        REQUIRE(std::equal(DynamicCall.begin(), DynamicCall.end(), patched.begin() + CallOffset));
+        REQUIRE(word_at(patched, Routine + 0x74) == DarkThreshold);
+        for (size_t offset = 0x78; offset < 0x100; offset += 4) {
+            REQUIRE(word_at(patched, Routine + offset) == 0);
+        }
+        REQUIRE_FALSE(FileSys::OotHighRefreshScaleOffset(std::span{patched}.subspan(Code)));
+        REQUIRE_FALSE(listed(context.Manager(), HighRefresh));
+        REQUIRE(listed(context.Manager(), DynamicFps));
+    }
+
+    SECTION("On: the high refresh routine, with its speed scale word") {
+        Settings::values.oot_high_refresh.SetValue(true);
+        const auto patched = context.Manager().PatchNSO(nso, "main");
+        REQUIRE(std::equal(DynamicCall.begin(), DynamicCall.end(), patched.begin() + CallOffset));
+        REQUIRE(word_at(patched, Routine + 0x18) == 0xB40002CC); // cbz x12, +0x70 (Dark's)
+        REQUIRE(word_at(patched, Routine + 0x6C) == 0x14000002); // b +0x74
+        REQUIRE(word_at(patched, Routine + 0x70) == 0xD65F03C0); // ret
+        REQUIRE(word_at(patched, Routine + 0x78) == 0x1E230848); // fmul s8, s2, s3
+        REQUIRE(word_at(patched, Routine + 0x84) == 0x40400000); // 3.0f
+        REQUIRE(word_at(patched, Routine + 0x88) == 0x3F800000); // 1.0f
+        REQUIRE(word_at(patched, Routine + 0x8C) == 0);
+        REQUIRE(FileSys::OotHighRefreshScaleOffset(std::span{patched}.subspan(Code)) ==
+                std::optional<size_t>{0x3C46288});
+        REQUIRE(listed(context.Manager(), HighRefresh));
+    }
+
+    SECTION("On, with the words past Dark's routine in use: Dark's routine") {
+        Settings::values.oot_high_refresh.SetValue(true);
+        nso[Routine + 0x80] = 1;
+        const auto patched = context.Manager().PatchNSO(nso, "main");
+        REQUIRE(word_at(patched, Routine + 0x74) == DarkThreshold);
+        REQUIRE(word_at(patched, Routine + 0x80) == 1);
+        REQUIRE_FALSE(FileSys::OotHighRefreshScaleOffset(std::span{patched}.subspan(Code)));
+    }
+
+    SECTION("On, but off in Add-Ons: Dark's routine") {
+        Settings::values.oot_high_refresh.SetValue(true);
+        Settings::values.disabled_addons[OcarinaTitleId] = {std::string{HighRefresh}};
+        const auto patched = context.Manager().PatchNSO(nso, "main");
+        REQUIRE(word_at(patched, Routine + 0x74) == DarkThreshold);
+        REQUIRE(word_at(patched, Routine + 0x78) == 0);
+    }
 }

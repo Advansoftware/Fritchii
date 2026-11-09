@@ -65,6 +65,7 @@ SETTING(u16, false);
 SWITCHABLE(AnisotropyMode, true);
 SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
+SWITCHABLE(OotRefreshCap, false);
 SWITCHABLE(AspectRatio, true);
 SWITCHABLE(AstcDecodeMode, true);
 SWITCHABLE(AstcRecompression, true);
@@ -664,6 +665,23 @@ struct Values {
     // first launch (oot_fps_asked).
     SwitchableSetting<bool> oot_30fps{linkage, false, "oot_30fps", Category::RendererAdvanced};
     Setting<bool> oot_fps_asked{linkage, false, "oot_fps_asked", Category::RendererAdvanced};
+    // Ocarina of Time above 60 fps (experimental, off by default): the "High refresh rate
+    // (built-in)" patch makes the game's step always follow real time, below 1.0 too, and the
+    // present pacing (nx2_gsv.h PaceToVblank) caps it at oot_high_refresh_cap instead of 60.
+    // Takes effect when the game starts; the cap also while it runs. The 30 FPS mode wins.
+    SwitchableSetting<bool> oot_high_refresh{linkage,
+                                             false,
+                                             "oot_high_refresh",
+                                             Category::RendererAdvanced,
+                                             Specialization::Paired};
+    SwitchableSetting<OotRefreshCap> oot_high_refresh_cap{linkage,
+                                                          OotRefreshCap::Display,
+                                                          "oot_high_refresh_cap",
+                                                          Category::RendererAdvanced,
+                                                          Specialization::Default,
+                                                          true,
+                                                          true,
+                                                          &oot_high_refresh};
     // Which revision of the Frizti tuned settings (common/frizti_settings.h) this config has had
     // applied once (MainWindow::MigrateFriztiSettings; config/frizti.ini keeps it too).
     Setting<u32> frizti_settings_revision{linkage, 0, "frizti_settings_revision",
@@ -1035,8 +1053,14 @@ constexpr u32 MAX_FRAME_GEN_MULTIPLIER = 4;
 [[nodiscard]] bool FrameGenActive();
 [[nodiscard]] u32 FrameGenMultiplier();
 /// Whether emulation runs at the speed limit: use_speed_limit, and in Fritchii always for Ocarina
-/// of Time, whose logic speeds up with the frame rate ("Unlocked" made the game run fast).
+/// of Time, whose logic speeds up with the frame rate ("Unlocked" made the game run fast). Not
+/// while Ocarina runs with its high refresh rate patch outside the 30 FPS mode: its step follows
+/// real time then, so "Unlocked" only lifts the frame rate cap.
 [[nodiscard]] bool SpeedLimitEnabled();
+/// Set by the loader when it loads Ocarina of Time's main: whether the "High refresh rate
+/// (built-in)" patch was applied to it (Settings oot_high_refresh).
+void SetOotHighRefreshPatched(bool patched);
+[[nodiscard]] bool OotHighRefreshPatched();
 
 [[nodiscard]] size_t FrameGenGenerations();
 
