@@ -65,6 +65,9 @@ struct BuiltinPatch {
     /// When set, the patch applies only while this environment variable is 1 (A/B before it
     /// becomes a default).
     const char* enable_env = nullptr;
+    /// When set, this environment variable at 1 skips the patch (an A/B without touching the
+    /// player's Add-Ons).
+    const char* disable_env = nullptr;
 };
 
 // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
@@ -135,6 +138,7 @@ constexpr std::array BUILTIN_PATCHES{
         .module = "main",
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = MAX_RESOLUTION_RECORDS,
+        .disable_env = "EDEN_NX2_NO_MAX_RES",
     },
     BuiltinPatch{
         .name = "Dynamic FPS by Dark (built-in)",
@@ -593,6 +597,13 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         if (std::find(disabled.cbegin(), disabled.cend(), patch.name) != disabled.cend()) {
             LOG_INFO(Loader, "    - Skipping \"{}\": disabled in Add-Ons", patch.name);
             continue;
+        }
+        if (patch.disable_env != nullptr) {
+            if (const char* const value = std::getenv(patch.disable_env);
+                value != nullptr && std::string_view{value} == "1") {
+                LOG_INFO(Loader, "    - Skipping \"{}\": {}=1", patch.name, patch.disable_env);
+                continue;
+            }
         }
         if (patch.build_id != build_id) {
             LOG_INFO(Loader, "    - Skipping \"{}\": build id {} is not {}", patch.name, build_id,
