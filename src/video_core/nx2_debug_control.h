@@ -410,6 +410,11 @@ inline void LoadExperiments() {
         // bugs, rarely under 40 fps.
         g_experiments[42].store(1, std::memory_order_relaxed);
         g_experiments[43].store(3, std::memory_order_relaxed);
+        // EXP56 = 1 (2026-11-09): a cleared depth target larger than its colour targets is not
+        // uploaded from guest memory first (TextureCache::JoinImages, overwritten_by_clear).
+        // Castle Town live toggle 41.3 -> 43.8 fps, clear zone 54.7 -> 36.3 ms/s; screenshots
+        // off/on identical.
+        g_experiments[56].store(1, std::memory_order_relaxed);
         // EXP39 = 3: publish to a back that waits after 8 words, no snapshot refresh of entries
         // that ran (zortos293/Lichii#805 62db242b34; see the EXP39 notes above). Timing only.
         g_experiments[39].store(3, std::memory_order_relaxed);
