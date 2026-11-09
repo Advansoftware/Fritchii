@@ -397,6 +397,8 @@ struct Values {
     // still overrides it.
     Setting<DlssPreset> nvidia_dlss_preset{linkage, DlssPreset::K, "nvidia_dlss_preset",
                                            Category::Renderer};
+    // AMD FSR 3.1 in place of Ocarina of Time's own upscale pass (port of zortos #1060).
+    SwitchableSetting<bool> ocarina_fsr{linkage, false, "ocarina_fsr", Category::Renderer};
     SwitchableSetting<AspectRatio, true> aspect_ratio{linkage,
                                                       AspectRatio::R16_9,
                                                       "aspect_ratio",

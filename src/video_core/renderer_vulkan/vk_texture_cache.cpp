@@ -27,6 +27,7 @@
 #include "shader_recompiler/byte_addressed_image.h"
 #include "shader_recompiler/exception.h"
 
+#include "video_core/fsr.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/nx2.h"
 #include "video_core/nx2_debug_control.h"
@@ -1921,7 +1922,7 @@ bool TextureCacheRuntime::UpscaleWithFsr3(Framebuffer* dst_framebuffer, ImageVie
             .frame_time_ms = frame_time_ms,
             .reset = reset,
             .sharpen = sharpen,
-            .sharpness = 1.0f - stops / 2.0f,
+            .sharpness = FSR::RcasSharpnessFromStops(stops),
         });
     } catch (const vk::Exception& exception) {
         LOG_ERROR(Render_Vulkan, "FSR 3.1 evaluation unavailable ({}); using the temporal stand-in",

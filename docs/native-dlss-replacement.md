@@ -37,30 +37,58 @@ and should remain private. No shaders are skipped or game files changed by this 
 ## Ocarina of Time
 
 The Legend of Zelda: Ocarina of Time (`0400486024DEC000`) has no DLSS of its own. Its
-end-of-frame upscale pass is replaced with NVIDIA DLSS when the setting is on and Streamline
-has DLSS for the device. FSR is not used for this game, and no environment override is needed.
+end-of-frame upscale pass can be replaced with FSR 3.1 on Linux or Windows, on any supported
+Vulkan GPU, or NVIDIA DLSS on Windows. The **Use AMD FSR 3.1 upscaling in Ocarina of Time**
+setting (`ocarina_fsr`) is off by default. NVIDIA DLSS takes precedence when its setting is
+enabled and the runtime is available; FSR runs only when its own setting is on, so without it
+the game keeps its own pass whenever DLSS is off, unavailable or fails to start.
+`EDEN_NX2_DLSS_REPLACEMENT=fsr` explicitly enables FSR; `native` disables both replacements;
+`dlss` asks for DLSS as its setting does.
 
-- Max Resolution add-on off: the 3/4-scale pass (`e40f5efb5480e692`) is replaced and DLSS
+- Max Resolution add-on off: the 3/4-scale pass (`e40f5efb5480e692`; `ef542df87cacfe9e` on the
+  Linux RADV build, same contract) is replaced and FSR/DLSS
   writes the game's output size (1080p to 1440p docked, 810p to 1080p handheld).
 - Max Resolution add-on on, docked: the full-size pass (`6bd913e1f34e83eb`) at 2560x1440 is
-  replaced by a 3840x2160 DLSS image. The game still finishes its 1440p frame. At presentation,
-  the HUD is taken from the difference between that frame and a 1440p copy of the DLSS scene,
+  replaced by a 3840x2160 temporal image. The game still finishes its 1440p frame. At presentation,
+  the HUD is taken from the difference between that frame and a 1440p copy of the temporal scene,
   and composited over the 4K scene. The 4K image skips the presentation's post-processing and
   upscale filters.
+- Max Resolution add-on on, handheld: the scene renders at 1920x1080 and the same output pass
+  runs at 1:1 (`c033c3ddc9f0897b`, 1920x1080 to 1920x1080); the game's final pass then scales to
+  its 2560x1440 output. FSR replaces it as native anti-aliasing (no upscale). DLSS leaves the
+  game's pass there (DLAA through it is untested).
 - The game has no motion vectors or jitter. Motion comes from the scene depth reprojected
   through this and the previous frame's camera (vertex constant buffer 3). Link's recognized
   skinned draw is replayed with both poses where his depth matches. Without his pose the frame
-  keeps the camera motion. The input is tonemapped, so DLSS runs in LDR without auto exposure.
-- FXAA and SMAA are skipped on frames DLSS drew.
+  keeps the camera motion. The input is tonemapped: both backends run in LDR without auto exposure.
+- FSR's LDR profile uses unit exposure/pre-exposure (no auto exposure), finite standard
+  device depth (near 0.1, far 25000), and vertical FOV recovered from the view-projection.
+  Its shaders use `HDR_COLOR_INPUT=0` and `INVERTED_DEPTH=0`. Camera reconstruction alone
+  converts the stored [0,1] depth to GL [-1,1] clip coordinates. Motion is previous minus
+  current in render pixels, with screen-down Y, so FSR's scale is `(1,1)` before normalization.
+- Jitter is zero: the game has no subpixel sample sequence. Adding host jitter only to the
+  upscaler cannot recover detail and corrupts reprojection. Safe host jitter would require
+  changing the raster projection plus unjittered motion/depth handling (cf. #253), out of scope.
+  Consequently this is temporal stabilization/upscaling, not full jittered supersampling.
+- #644 (`82494c4820`, `74a2d20c90`, `4352c06bbf`) supplies the effects capture, used by FSR only
+  (DLSS gets no bias mask and runs as before). FSR uses its R16F current/history bias as both
+  reactive and transparency/composition masks; missing capture uses zero masks, not stale
+  history. The DLSS preset changes were not imported.
+- RCAS uses `fsr_sharpening_slider` with the existing inverted 0–200 mapping (stops × 100;
+  stored 200 disables sharpening). HUD handling
+  and the Max Resolution 1440p-to-4K presentation composition are shared with #606.
+- FXAA and SMAA are skipped on frames either temporal backend drew.
 - Any unexpected input, a busy frame slot, a rescaled image (resolution scale other than 1x) or
   a failed evaluation leaves the game's pass to run. The log names the reason as
-  `Ocarina DLSS: the game's upscale draws frame N (reason)`.
+  `Ocarina temporal: the game's upscale draws frame N (reason)`.
+  `EDEN_NX2_DLSS_CONTRACT_TRACE=1` logs every FSR evaluation and scheduler writeback;
+  otherwise periodic evaluation/writeback messages avoid a per-frame logging cost.
 
 Shader hashes, buffer offsets and Link's mesh shape are taken from the game's current build.
 A game update that changes them disables the replacement and leaves the game's pass in place.
 The "Ocarina of Time anti-aliasing" option (No sharpening, docs/nx2/oot-network-bypass.md)
 bypasses the same network on other GPUs. It does nothing while this replacement is enabled:
-NVIDIA DLSS takes precedence because it replaces the same output pass.
+temporal upscaling takes precedence because it replaces the same output pass.
 
 ## Settings and comparison runs
 
