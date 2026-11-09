@@ -16,6 +16,8 @@ Fritchii v5.1, a fix-up for v5.
 
 - **Dialogue text no longer turns into scraps of other textures.** Each new text box size could show garbage the first time it appeared.
 - **Delete Shader Cache** in the Help menu (and when you right-click the game on the home screen), with a confirmation. Only for a cache that went bad: the shaders are prepared again on the next start.
+- **AMD: likely fix for a crash right after pressing Play** (seen on an RX 6600 with a shader cache from v4). v5's change for the red line in the Royal Family's Tomb is taken back for now, so that line can show again on AMD until it's redone and tested on AMD hardware.
+- One v5 change to how GPU memory is refreshed after small writes is taken back too: in this emulator it could bring back stale data.
 - **4K and scaled displays:** Fritchii now uses exactly the scale set in Windows. 150% on a 4K screen became 200% (windows too big, dialogs cut off) and 125% became 100% (tiny text).
 
 ### Everything new in v5
@@ -37,10 +39,9 @@ Windows x64. Tested with The Legend of Zelda: Ocarina of Time (0400486024DEC000)
 
 #### Fixed
 - **New players: "Press Start", chat bubbles and lighting** are right on an empty shader cache (they were missing or wrong while shaders were still building).
-- **AMD: the red dotted line in the Royal Family's Tomb** (zortos293/Lichii#820).
 - **Objects that could vanish for a whole session** in some games (clip distances, zortos293/Lichii#902).
 - **Fastmem kept on PCs with little free memory** instead of silently running 20-25% slower (zortos293/Lichii#645).
-- Less RAM while shaders are prepared (#878), stale data after some GPU writes (#700), a rare channel deadlock (#609), mods folders that don't exist (#686), Windows long paths (#576), and a few smaller ones (#918, #727, #610).
+- Less RAM while shaders are prepared (#878), a rare channel deadlock (#609), mods folders that don't exist (#686), Windows long paths (#576), and a few smaller ones (#918, #727, #610).
 
 #### Shader cache
 - The cache moves to version 54 (zortos's numbering), so caches from zortos's builds and Fritchii's are shared. The first start copies your old cache once (about +1.2 GB for OoT). The old `v52` file stays so you can roll back to v4; you can delete it later if you don't plan to.
