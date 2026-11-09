@@ -206,7 +206,8 @@ private:
     /// EDEN_NX2_PIPELINE_CLEAN / EDEN_NX2_EXP19: CurrentGraphicsPipeline without
     /// FixedPipelineState::Refresh nor the key comparison while nothing Refresh reads changed
     /// since the last lookup. `patch`: EXP19=2. With EXP50 the blend registers are compared by
-    /// what they make (FixedPipelineState::BlendingMatches), not word for word.
+    /// what they make (FixedPipelineState::BlendingMatches), not word for word. With EXP52 a
+    /// change of programs alone keys only the attribute types again and looks the key up.
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipelineClean(bool patch);
     /// The registers Refresh reads with these features, as (first word, words) ranges.
     /// `blend_by_value` (EXP50): the blend registers go to their own ranges.
@@ -245,8 +246,16 @@ private:
         /// Hits the old check would have refreshed: blend registers or Dirty::Blending moved
         /// while the state they make stayed the same (EXP50).
         u64 blend_saved{};
+        /// Hits whose programs changed while every other Refresh input stood: only the attribute
+        /// types were keyed again, then Next looked the new key up (EXP52).
+        u64 programs_only{};
+        /// EXP52=2: programs-only keys checked against a full Refresh, and those that differed.
+        u64 programs_verified{};
+        u64 programs_mismatches{};
+        u32 programs_mismatches_logged{}; ///< For the whole session: the first 16 are logged
         /// Why lookups refreshed: pipeline changed or unknown, programs, Dirty::Blending,
-        /// other flags / topology / engine hint / dual-source bit, watched registers.
+        /// other flags / topology / engine hint / dual-source bit, watched registers. With EXP52
+        /// on, programs count only when nothing else is in the way, which never refreshes.
         std::array<u64, 5> miss_reasons{};
         std::chrono::steady_clock::time_point last_log{};
     } clean;

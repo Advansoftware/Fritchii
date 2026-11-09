@@ -1901,6 +1901,48 @@ int PipelineCleanMode() {
     const int experiment = VideoCore::Nx2Debug::Experiment(19);
     return experiment != 0 ? experiment : (env ? 1 : 0);
 }
+
+/// EXP52=2: where a programs-only key (`fast`) differs from the full Refresh's (`full`).
+std::string DescribeProgramsKeyDiff(const GraphicsPipelineCacheKey& fast,
+                                    const GraphicsPipelineCacheKey& full) {
+    const FixedPipelineState& a = fast.state;
+    const FixedPipelineState& b = full.state;
+    std::string diffs;
+    if (fast.unique_hashes != full.unique_hashes) {
+        diffs += " unique_hashes";
+    }
+    if (a.raw1 != b.raw1) {
+        diffs += fmt::format(" raw1^{:#x}", a.raw1 ^ b.raw1);
+    }
+    if (a.raw2 != b.raw2) {
+        diffs += fmt::format(" raw2^{:#x}", a.raw2 ^ b.raw2);
+    }
+    if (a.attribute_types != b.attribute_types) {
+        diffs += fmt::format(" attribute_types {:#x} (programs only) vs {:#x} (Refresh)",
+                             a.attribute_types, b.attribute_types);
+    }
+    if (std::memcmp(a.attachments.data(), b.attachments.data(), sizeof(a.attachments)) != 0) {
+        diffs += " attachments";
+    }
+    if (std::memcmp(&a.dynamic_state, &b.dynamic_state, sizeof(a.dynamic_state)) != 0) {
+        diffs += " dynamic_state";
+    }
+    // Any byte at all, hashed or not (the state past Size() still goes to the driver).
+    const auto* const bytes_a = reinterpret_cast<const u8*>(&a);
+    const auto* const bytes_b = reinterpret_cast<const u8*>(&b);
+    size_t first = sizeof(a);
+    size_t last = 0;
+    for (size_t offset = 0; offset < sizeof(a); ++offset) {
+        if (bytes_a[offset] != bytes_b[offset]) {
+            first = (std::min)(first, offset);
+            last = offset;
+        }
+    }
+    if (first < sizeof(a)) {
+        diffs += fmt::format(" state bytes {}..{} (hashed size {})", first, last, b.Size());
+    }
+    return diffs;
+}
 } // Anonymous namespace
 
 void PipelineCache::BuildCleanWatch(bool patch, bool blend_by_value) {
@@ -2163,12 +2205,22 @@ void PipelineCache::TakeCleanSnapshot() {
 // build (canonical as RefreshGraphicsKey makes them) and the dual-source bit are compared with
 // the key's: equal is a hit, different patches only that part of the key, which Next looks up.
 // The compare reads the registers, so blend writes that never raise the flag (#679) are seen.
+// With EXP52 (fable52_answer_1 section 1): when the programs changed but every other input above
+// stands, the state part of the key is still what Refresh would build, except the one field the
+// programs feed: with dynamic vertex input, the attribute types are masked by what the bound
+// programs read (RefreshGraphicsKey's KeyedAttributeTypes over vertex_attribute_types, the
+// unmasked types, which stay current: Dirty::VertexInput either misses or patches them). Nothing
+// else Refresh or CanonicalizeKeyState writes reads the programs (CanonicalizeNative runs with
+// the full mask). Those types are keyed again for the new programs and Next (or the slow path)
+// looks the new key up. EXP52=2 also runs the full Refresh after it, compares the whole key and
+// keeps Refresh's ("programs only (EXP52)" mismatches in the per-second line, first 16 logged).
 GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
     if (!RefreshStages(graphics_key.unique_hashes)) {
         current_pipeline = nullptr;
         clean.pipeline = nullptr;
         return nullptr;
     }
+    const int programs_mode = VideoCore::Nx2Debug::Experiment(52);
     const bool by_value = VideoCore::Nx2Debug::Experiment(50) != 0;
     if (!clean.built || clean.patch != patch || clean.blend_by_value != by_value) {
         BuildCleanWatch(patch, by_value);
@@ -2183,10 +2235,12 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
     // The first reason the last Refresh's key may not stand (index into clean.miss_reasons),
     // -1 = none.
     int miss = -1;
+    // With EXP52 a change of programs is no reason by itself: the other checks decide.
+    const bool programs_changed = clean.hashes != graphics_key.unique_hashes;
     if (clean.pipeline == nullptr || clean.pipeline != current_pipeline ||
         clean.maxwell3d != maxwell3d) {
         miss = 0;
-    } else if (clean.hashes != graphics_key.unique_hashes) {
+    } else if (programs_changed && programs_mode == 0) {
         miss = 1;
     } else if (blending_dirty && !patch_blending && !by_value) {
         miss = 2;
@@ -2201,6 +2255,8 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
         miss = 4;
     }
     bool patch_blend_value = false;
+    // Only reached with EXP52 on: miss 1 catches a change of programs otherwise.
+    const bool programs_only = miss < 0 && programs_changed;
     if (miss < 0) {
         ++clean.hits;
         if (by_value) {
@@ -2242,34 +2298,53 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
             const auto& reasons = clean.miss_reasons;
             LOG_INFO(Render_Vulkan,
                      "EDEN_NX2_PIPELINE_CLEAN per second: lookups without Refresh {} (patched "
-                     "{}, saved by the blend value check (EXP50{}) {}), with Refresh {} "
-                     "(pipeline changed {}, programs {}, blend flag {}, other state {}, "
-                     "registers {})",
+                     "{}, saved by the blend value check (EXP50{}) {}, programs only (EXP52={}) "
+                     "{}{}), with Refresh {} (pipeline changed {}, programs {}, blend flag {}, "
+                     "other state {}, registers {})",
                      per_second(clean.hits), per_second(clean.patches), by_value ? " on" : " off",
-                     per_second(clean.blend_saved), per_second(clean.misses),
-                     per_second(reasons[0]), per_second(reasons[1]), per_second(reasons[2]),
-                     per_second(reasons[3]), per_second(reasons[4]));
+                     per_second(clean.blend_saved), programs_mode,
+                     per_second(clean.programs_only),
+                     programs_mode == 2
+                         ? fmt::format(", verified {} in {:.0f} s, {} differ",
+                                       clean.programs_verified, seconds,
+                                       clean.programs_mismatches)
+                         : std::string{},
+                     per_second(clean.misses), per_second(reasons[0]), per_second(reasons[1]),
+                     per_second(reasons[2]), per_second(reasons[3]), per_second(reasons[4]));
             clean.last_log = now;
             clean.hits = 0;
             clean.patches = 0;
             clean.misses = 0;
             clean.blend_saved = 0;
+            clean.programs_only = 0;
+            clean.programs_verified = 0;
+            clean.programs_mismatches = 0;
             clean.miss_reasons = {};
         }
     }
     if (clean.pipeline != nullptr) {
-        if (!patch_blending && !patch_vertex_input && !patch_blend_value) {
+        const bool patching = patch_blending || patch_vertex_input || patch_blend_value;
+        if (!patching && !programs_only) {
             current_pipeline->MarkUsed(frame_count);
             return BuiltPipeline(current_pipeline);
         }
         // Every other Refresh input is unchanged, so the snapshot stands. As RefreshGraphicsKey
         // under the raised flags; VertexInput stays raised for the command buffer update.
-        ++clean.patches;
+        if (patching) {
+            ++clean.patches;
+        }
         clean.pipeline = nullptr;
         if (patch_vertex_input) {
             vertex_attribute_types = FixedPipelineState::DynamicAttributeTypes(maxwell3d->regs);
+        }
+        if (patch_vertex_input || (programs_only && dynamic_features.has_dynamic_vertex_input)) {
+            // New programs read other inputs: their types are keyed from the unmasked ones.
             graphics_key.state.attribute_types = VideoCommon::KeyedAttributeTypes(
                 vertex_attribute_types, graphics_key.unique_hashes, vertex_attribute_masks);
+        }
+        if (programs_only) {
+            ++clean.programs_only;
+            clean.hashes = graphics_key.unique_hashes; // The snapshot's programs from now on
         }
         if (patch_blending || patch_blend_value) {
             // EXP19=2 compared the dual-source bit above; EXP50 may find it moved.
@@ -2282,6 +2357,25 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineClean(bool patch) {
                 CanonicalizeKeyState(graphics_key.state, dynamic_features);
             }
             TakeCleanBlendSnapshot(); // No ranges unless by_value
+        }
+        if (programs_only && programs_mode == 2) {
+            // Verify: the full Refresh must build the same key, byte for byte. Its key is kept
+            // (and its flag clears, as a miss would do them).
+            const GraphicsPipelineCacheKey fast = graphics_key;
+            RefreshGraphicsKey();
+            ++clean.programs_verified;
+            if (std::memcmp(&fast, &graphics_key, sizeof(fast)) != 0) {
+                ++clean.programs_mismatches;
+                if (clean.programs_mismatches_logged < 16) {
+                    ++clean.programs_mismatches_logged;
+                    LOG_WARNING(Render_Vulkan,
+                                "Programs-only key (EXP52=2) differs from Refresh{} (programs "
+                                "{:016x}):{}",
+                                fast == graphics_key ? " outside the hashed bytes" : "",
+                                fmt::join(graphics_key.unique_hashes, " "),
+                                DescribeProgramsKeyDiff(fast, graphics_key));
+                }
+            }
         }
     } else {
         TakeCleanSnapshot();
