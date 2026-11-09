@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -584,6 +585,63 @@ namespace {
 // only kept every pipeline the title ever built in host memory (title 1: a 245 MB file, ~0.35 GB
 // of RAM for the session) and copied it whole at each save, which stalled frames; pipelines built
 // no slower without it.
+/// The driver's own disk cache folder (NVIDIA's GLCache, AMD's VkCache) on Windows: files, size
+/// and the newest write, so a "shaders build again" report shows whether the driver kept what the
+/// preparation built (fable52_answer_3: an AMD player's cache kept ~44% and nothing after a
+/// restart). Logged at boot, after a preparation and at exit.
+void LogDriverCacheFolder(const Device& device, std::string_view when) {
+#ifdef _WIN32
+    const char* const local = std::getenv("LOCALAPPDATA");
+    if (local == nullptr) {
+        return;
+    }
+    std::filesystem::path folder{local};
+    switch (device.GetDriverID()) {
+    case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
+        folder /= "NVIDIA/GLCache";
+        break;
+    case VK_DRIVER_ID_AMD_PROPRIETARY:
+        folder /= "AMD/VkCache";
+        break;
+    default:
+        return;
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_directory(folder, ec)) {
+        LOG_INFO(Render_Vulkan, "Driver cache folder {} ({}): not there", folder.string(), when);
+        return;
+    }
+    u64 files = 0;
+    u64 bytes = 0;
+    std::filesystem::file_time_type newest{};
+    for (std::filesystem::recursive_directory_iterator it{folder, ec}, end; !ec && it != end;
+         it.increment(ec)) {
+        std::error_code entry_ec;
+        if (!it->is_regular_file(entry_ec)) {
+            continue;
+        }
+        ++files;
+        bytes += it->file_size(entry_ec);
+        newest = (std::max)(newest, it->last_write_time(entry_ec));
+    }
+    const auto age = std::chrono::duration_cast<std::chrono::seconds>(
+        std::filesystem::file_time_type::clock::now() - newest);
+    const char* const amd_path = std::getenv("AMD_VK_PIPELINE_CACHE_PATH");
+    LOG_INFO(Render_Vulkan,
+             "Driver cache folder {} ({}): {} files, {} MiB, newest written {} s ago{}{}",
+             folder.string(), when, files, bytes >> 20, files != 0 ? age.count() : -1,
+             amd_path != nullptr ? "; AMD_VK_PIPELINE_CACHE_PATH=" : "",
+             amd_path != nullptr ? amd_path : "");
+#endif
+}
+
+/// A marker that lives while a pipeline cache does: still there at boot means the last session
+/// never reached ~PipelineCache (killed, crashed or its emulation thread terminated), so the
+/// driver may not have finished writing its cache either.
+std::filesystem::path SessionMarkerPath() {
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) / "pipeline_cache_open.flag";
+}
+
 bool DriverCachesPipelines(const Device& device) {
     switch (device.GetDriverID()) {
     case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
@@ -1828,6 +1886,11 @@ PipelineCache::~PipelineCache() {
                  background_taken, background_ready.size());
     }
     DestroyPipelinesWithProgress(background_ready);
+    LogDriverCacheFolder(device, "at exit, before the device goes");
+    {
+        std::error_code ec;
+        std::filesystem::remove(SessionMarkerPath(), ec);
+    }
     DestroyPipelinesWithProgress(graphics_cache);
     DestroyPipelinesWithProgress(evicted_pipelines);
     DestroyPipelinesWithProgress(retired_translations);
@@ -2665,6 +2728,21 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         return;
     }
     g_disk_load_start = std::chrono::steady_clock::now();
+    {
+        std::error_code ec;
+        const auto marker = SessionMarkerPath();
+        if (std::filesystem::exists(marker, ec)) {
+            LOG_WARNING(Render_Vulkan, "The previous session ended without a clean stop (its "
+                                       "pipeline cache was never closed): the driver may have "
+                                       "lost what it built then");
+        }
+        std::ofstream{marker} << "open";
+        LogDriverCacheFolder(device, "at boot");
+        LOG_INFO(Render_Vulkan, "VK_KHR_pipeline_binary: {}",
+                 device.GetAvailableExtensions().contains("VK_KHR_pipeline_binary")
+                     ? "offered by the driver"
+                     : "not offered");
+    }
     if (!pipeline_cache_filename.empty()) {
         // A later load (another title or program) stops the earlier warm-ups and waits for them,
         // so StartComputeWarm and StartGraphicsWarm can start this title's and warm_cancel is
@@ -4186,6 +4264,10 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
     constexpr auto FastBuild = std::chrono::milliseconds{20};
     const auto disk_keys = precompile_disk_keys;
     const auto begin = std::chrono::steady_clock::now();
+    // Threads() workers beside the game; at full speed (the frontend holds the game for the
+    // preparation) one per host thread, at normal priority.
+    const size_t full_threads =
+        std::max<size_t>(threads, std::max(1U, std::thread::hardware_concurrency()));
     const auto complete = [&](size_t index) {
         const size_t finished = state.finished.fetch_add(1) + 1;
         {
@@ -4206,17 +4288,19 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
             callback(VideoCore::LoadCallbackStage::Build, finished, total);
         }
         if (finished % 5000 == 0) {
+            // The mode too: a player's preparation ran at 66 pipelines a second while the game
+            // was held for it, and the log never said whether it was at full speed
+            // (fable52_answer_3).
+            const bool full = shader_notify.PrecompileFullSpeed();
             LOG_INFO(Render_Vulkan,
-                     "Precompiled pipelines: {} of {} done, {} built ({} fast), {} failed, {:.0f} s",
+                     "Precompiled pipelines: {} of {} done, {} built ({} fast), {} failed, {:.0f} s "
+                     "({}, {} threads)",
                      finished, total, state.built.load(), state.fast.load(), state.failed.load(),
                      std::chrono::duration<double>(std::chrono::steady_clock::now() - begin)
-                         .count());
+                         .count(),
+                     full ? "full speed" : "beside the game", full ? full_threads : threads);
         }
     };
-    // Threads() workers beside the game; at full speed (the frontend holds the game for the
-    // preparation) one per host thread, at normal priority.
-    const size_t full_threads =
-        std::max<size_t>(threads, std::max(1U, std::thread::hardware_concurrency()));
     const auto work = [&](std::stop_token stop, size_t worker) {
         t_precompile_build = true;
         Common::SetCurrentThreadName("VkPrecompile");
@@ -4412,6 +4496,7 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
              state.built.load(), state.fast.load(), FastBuild.count(), state.failed.load(),
              state.known.load() + state.other_device.load(), state.known.load(),
              state.other_device.load(), total - reached, seconds);
+    LogDriverCacheFolder(device, "after the preparation");
     if (state.other_device.load() != 0) {
         // Which dynamic states made records "for another device" (recorded on a GPU that has
         // them dynamic and this one static, or the reverse): AMD players skipped most of the
