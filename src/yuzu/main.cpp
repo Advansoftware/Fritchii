@@ -178,10 +178,9 @@ static std::filesystem::path GetSwitchExeDirectory(const char* argv0) {
 // Built into the Frizti builds so players don't have to set anything: the switches tuned for
 // Ocarina of Time. Either nx2_switches.txt overrides any of them (=0 turns one off).
 // Not EDEN_NX2_WRITTEN_SSBO_MARK_KIB=64 (built in from v4 to v5.5): writes past its cap were not
-// tracked, so the next upload put stale guest bytes over GPU-written particle data, the huge
-// glowing triangles (Kokiri, Kakariko, graveyard; none in a long repro playtest with it off and
-// EXP1=1, 2026-11-09). Castle Town: 43.4/45.0 fps with it, 44.6/43.0 without (EXP1=1 on top:
-// 31.9/31.3, so EXP1 stays off).
+// tracked, one of the gaps behind the huge glowing triangles (the other: native compute write
+// marks, see BufferCache::unmarked_tail_ranges). Castle Town: 43.4/45.0 fps with it, 44.6/43.0
+// without; the triangles still showed without it alone (2026-11-09).
 constexpr std::pair<const char*, const char*> BuiltinSwitches[] = {
     {"EDEN_NX2_GRAPHICS_SSBO_BARE", "0"},
     {"EDEN_NX2_ACQUIRE_PRECHECK", "2"},   {"EDEN_NX2_MACRO_SINK", "1"},

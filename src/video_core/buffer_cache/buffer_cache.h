@@ -135,8 +135,16 @@ void BufferCache<P>::TickFrame() {
         }
         std::partial_sort(largest.begin(), largest.begin() + std::min<size_t>(6, largest.size()),
                           largest.end(), std::greater<>{});
-        LOG_INFO(HW_GPU, "Buffer cache: {} buffers {} MiB; largest {}", count, total >> 20,
-                 fmt::join(largest.begin(), largest.begin() + std::min<size_t>(6, largest.size()), ", "));
+        u64 tail_bytes{};
+        unmarked_tail_ranges.ForEach([&tail_bytes](DAddr begin, DAddr end) { tail_bytes += end - begin; });
+        LOG_INFO(HW_GPU,
+                 "Buffer cache: {} buffers {} MiB; largest {}; unmarked tails {} MiB, {} CPU "
+                 "writes ({} KiB) uploaded inline there",
+                 count, total >> 20,
+                 fmt::join(largest.begin(), largest.begin() + std::min<size_t>(6, largest.size()), ", "),
+                 tail_bytes >> 20, tail_inline_writes, tail_inline_bytes >> 10);
+        tail_inline_writes = 0;
+        tail_inline_bytes = 0;
     }
 
     // Calculate hits and shots and move hit bits to the right
@@ -192,7 +200,8 @@ void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu
     if (Nx2Perf::On(Nx2Perf::Opt::WriteIntersections) && keep_page_gpu_data) {
         const DAddr page_begin = Common::AlignDown(device_addr, DEVICE_PAGESIZE);
         const DAddr page_end = Common::AlignUp(device_addr + size, DEVICE_PAGESIZE);
-        if (!gpu_modified_ranges.Intersects(page_begin, page_end - page_begin)) {
+        if (!gpu_modified_ranges.Intersects(page_begin, page_end - page_begin) &&
+            !InUnmarkedTail(page_begin, page_end - page_begin)) {
             if (!Nx2Perf::Verify()) {
                 memory_tracker.MarkRegionAsCpuModified(device_addr, size);
                 MarkVertexBuffersStale(device_addr, size);
@@ -218,6 +227,19 @@ void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size, bool keep_page_gpu
     // above, so they aren't overwritten).
     const DAddr page_begin = Common::AlignDown(device_addr, DEVICE_PAGESIZE);
     const DAddr page_end = Common::AlignUp(device_addr + size, DEVICE_PAGESIZE);
+    // A page with untracked GPU writes past a storage write mark (unmarked_tail_ranges): marking
+    // it CPU-modified would upload the stale guest copy over them, and downloading it first would
+    // find nothing to download. Upload the CPU's own bytes instead, which are now in both places.
+    if (keep_page_gpu_data && InUnmarkedTail(page_begin, page_end - page_begin) &&
+        IsRegionRegistered(device_addr, size)) {
+        tmp_buffer.resize_destructive(size);
+        device_memory.ReadBlockUnsafe(device_addr, tmp_buffer.data(), size);
+        InlineMemoryImplementation(device_addr, size, tmp_buffer);
+        unmarked_tail_ranges.Subtract(device_addr, size);
+        ++tail_inline_writes;
+        tail_inline_bytes += size;
+        return;
+    }
     if (keep_page_gpu_data && gpu_modified_ranges.Intersects(page_begin, page_end - page_begin)) {
         // Switch 2 titles: upload the CPU's bytes into the buffer instead, as CachedWriteMemory
         // does, so the page stays GPU-owned and nothing waits for the host GPU.
@@ -1966,6 +1988,11 @@ bool BufferCache<P>::BindMultiRangeStorage(const Binding& binding, bool is_writt
                 if (write_mark_limit != ~u64{0}) {
                     write_mark_limit -= mark;
                 }
+                if (mark < segment.size) {
+                    AddUnmarkedTail(segment.device_addr + mark, segment.size - mark);
+                }
+            } else if (is_written) {
+                AddUnmarkedTail(segment.device_addr, segment.size);
             }
             runtime.PushMultiRangeSource(buffer, offset, segment.size);
         }
@@ -2165,6 +2192,9 @@ void BufferCache<P>::BindHostGraphicsStorageBuffers(size_t stage) {
         if (is_written) {
             const u32 mark = WrittenStorageMarkSize(size);
             MarkWrittenBuffer(binding.buffer_id, binding.device_addr, mark, false, mark < size);
+            if (mark < size) {
+                AddUnmarkedTail(binding.device_addr + mark, size - mark);
+            }
         }
 
         if constexpr (NEEDS_BIND_STORAGE_INDEX) {
@@ -2326,6 +2356,11 @@ void BufferCache<P>::BindHostComputeStorageBuffers() {
             // Only the cap leaves writes past the mark; the native mark bounds them.
             MarkWrittenBuffer(binding.buffer_id, binding.device_addr, mark, true,
                               capped_size < size && capped_size <= write_mark_limit);
+        }
+        if (is_written && mark < size) {
+            // The native mark is meant to bound the writes, but some shader still writes past
+            // it (the glowing triangles): keep CPU writes from uploading over the rest.
+            AddUnmarkedTail(binding.device_addr + mark, size - mark);
         }
 
         if constexpr (NEEDS_BIND_STORAGE_INDEX) {
@@ -2683,6 +2718,9 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
     memory_tracker.MarkRegionAsGpuModified(device_addr, size);
     MarkVertexBuffersStale(device_addr, size);
     gpu_modified_ranges.Add(device_addr, size);
+    if (!unmarked_tail_ranges.Empty()) {
+        unmarked_tail_ranges.Subtract(device_addr, size);
+    }
     QueueFenceDownload(device_addr, size);
     if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {
         Tegra::Nx2MarkGpuWritten(device_addr, size);
@@ -3683,9 +3721,11 @@ void BufferCache<P>::DeleteBuffer(BufferId buffer_id, bool do_not_mark) {
     InvalidateMultiRangeSegments(std::span{compute_segments}, buffer_id);
 
     // Mark the whole buffer as CPU written to stop tracking CPU writes
+    // A join (do_not_mark) copies the whole buffer into the new one, so its unmarked tails stay.
     if (!do_not_mark) {
         Buffer& buffer = slot_buffers[buffer_id];
         memory_tracker.MarkRegionAsCpuModified(buffer.CpuAddr(), buffer.SizeBytes());
+        unmarked_tail_ranges.Subtract(buffer.CpuAddr(), buffer.SizeBytes());
     }
 
     Unregister(buffer_id);
