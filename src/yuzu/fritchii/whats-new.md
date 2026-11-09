@@ -13,6 +13,7 @@ On Fritchii v4, v4.1, v5 or v5.1 you don't need to download anything: it offers 
 Fritchii v5.2, crash fixes.
 
 - **AMD: textures no longer write into other textures' memory.** Images whose size isn't a multiple of their block size wrote past their edge while being decoded. NVIDIA ignores that, AMD put it in other textures: black blocks, a crosshatch, and in the end a GPU crash. From CheezerWheezer's AMD fork.
+- **AMD (Windows driver): Shader libraries are off by default.** RX 5000 and 6000 cards crashed building them; unticking the setting was the workaround, now it's automatic. NVIDIA keeps them.
 - **No more crash when the PC's memory budget is reached** during long sessions (seen in Castle Town after half an hour). Buffers in system memory may now go over Windows' budget, like textures already could. Also from CheezerWheezer's AMD fork.
 
 ### In v5.1

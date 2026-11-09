@@ -1185,13 +1185,24 @@ bool Device::GetSuitability(bool requires_swapchain) {
     FOR_EACH_VK_EXTENSION(EXTENSION);
 
     // Graphics pipelines linked from per-stage libraries (vk_pipeline_library): the Shader
-    // libraries setting turns them on for NVIDIA and AMD GPUs (Intel and others are untested),
-    // EDEN_NX2_GPL=1 for any GPU, EDEN_NX2_GPL=0 turns them off.
+    // libraries setting turns them on for NVIDIA GPUs and AMD's Mesa driver (Intel and others are
+    // untested), EDEN_NX2_GPL=1 for any GPU, EDEN_NX2_GPL=0 turns them off. Not on AMD's Windows
+    // driver: RX 5000 and 6000 owners crash building library pipelines from their cache
+    // (amdvlk64.dll; unticking Shader libraries is their workaround, 2026-11-09), and the
+    // precompile preparation now does the first-time builds those libraries were for.
     graphics_pipeline_library_requested = [this] {
         if (const char* value = std::getenv("EDEN_NX2_GPL"); value && *value) {
             return *value != '0';
         }
         const u32 vendor = properties.properties.vendorID;
+        const bool amd_windows_driver =
+            properties.driver.driverID == VK_DRIVER_ID_AMD_PROPRIETARY;
+        if (vendor == 0x1002 && amd_windows_driver &&
+            Settings::values.use_graphics_pipeline_library.GetValue()) {
+            LOG_INFO(Render_Vulkan, "Nx2Perf gpl: shader libraries off on AMD's proprietary "
+                                    "driver (EDEN_NX2_GPL=1 turns them on)");
+            return false;
+        }
         return Settings::values.use_graphics_pipeline_library.GetValue() &&
                (vendor == 0x10DE || vendor == 0x1002);
     }();
