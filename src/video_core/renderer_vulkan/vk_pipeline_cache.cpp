@@ -1229,7 +1229,12 @@ size_t EvictAbovePipelines() {
         constexpr size_t MaxPipelines = 8000;
         const u64 ram = Common::GetMemInfo().TotalPhysicalMemory;
         const size_t by_ram = static_cast<size_t>(ram / 16 / PipelineBytes);
-        const size_t chosen = std::clamp<size_t>(by_ram, MinPipelines, MaxPipelines);
+        // Only where RAM is short: an evicted pipeline is rebuilt on the GPU thread when its area
+        // comes back (a run that evicted 3,400 in 25 minutes paid 14 s of stalls), so 24 GB and
+        // more keep the old 8,000; under that, paging costs more than those rebuilds.
+        constexpr u64 ShortRam = u64{24} << 30;
+        const size_t chosen =
+            ram >= ShortRam ? MaxPipelines : std::clamp<size_t>(by_ram, MinPipelines, MaxPipelines);
         LOG_INFO(Render_Vulkan,
                  "Graphics pipelines are evicted past {} ({} MB of RAM; "
                  "EDEN_NX2_PIPELINE_EVICT_ABOVE sets it)",
