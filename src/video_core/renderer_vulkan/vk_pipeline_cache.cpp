@@ -4231,7 +4231,9 @@ std::string PipelineCache::KeptStamp(const std::string& prepared_stamp) const {
     // kept pipelines the same is checked at boot on a sample of them (CheckKeptSample).
     // NX2KEPT4: the SPIR-V emitter changed under kept modules (zortos293/Lichii#902 clip
     // distances; #820 noperspective varyings, then its revert), which the sample only sees if it hits one.
-    return fmt::format("{}kept NX2KEPT4 cache {} settings {:#x} gpl {} oot {} {:016x} canonical "
+    // NX2KEPT5 (v5.6): F32->S32 conversions saturate in range (zortos293/Lichii#1051), and the
+    // fragment output masks are kept with the infos (Fritchii #29, AMD horizon rainbow).
+    return fmt::format("{}kept NX2KEPT5 cache {} settings {:#x} gpl {} oot {} {:016x} canonical "
                        "{}\n",
                        prepared_stamp, CACHE_VERSION, SpirvSettingsStamp(),
                        device.IsExtGraphicsPipelineLibrarySupported() ? 1 : 0,
