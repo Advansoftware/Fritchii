@@ -30,6 +30,8 @@
 
 #include "common/assert.h"
 #include "common/dkb_frame_trace.h"
+#include "common/host_memory.h"
+#include "common/memory_detect.h"
 #include "shader_recompiler/exception.h"
 #include "common/logging.h"
 #include "common/scope_exit.h"
@@ -287,6 +289,68 @@ void RecordDispatchBarrier(vk::CommandBuffer cmdbuf) {
                            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            0, READ_BARRIER);
+}
+
+/// EDEN_NX2_MEM_OWNERS (on by default, =0 off): the "Memory owners" line every 10 s.
+bool MemoryOwnersEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_MEM_OWNERS");
+        return value == nullptr || value[0] != '0';
+    }();
+    return enabled;
+}
+
+/// One line splitting the working set into owners (fable_answer_26 A3). The guest residency and
+/// heap numbers come from Core::DeviceMemory's MemoryProbe thread (at most 10 s old), the rest is
+/// read here. All in MiB. The residual is the private working set less what the line attributes
+/// to the host side; its terms are estimates and may overlap (driver heaps among the heaps, VMA's
+/// host heap not all resident), so a negative residual means overlap, not an error.
+void LogMemoryOwners(const Device& device, PipelineCache& pipeline_cache,
+                     StagingBufferPool& staging_pool) {
+    constexpr u64 PipelineBytes = u64{460} << 10; // ~0.45 MB of driver memory each
+    const Common::ProcessMemoryUsage process = Common::GetProcessMemoryUsage();
+    const auto commit = Common::HostMemory::GetCommitStats();
+    const auto resident = Common::HostMemory::LastResidentSample();
+    const auto pipelines = pipeline_cache.MemoryOwners();
+    const HeapTotals heaps = GetHeapTotals(device);
+    const Common::HeapUsage win32_heaps = Common::LastHeapUsage();
+    const u64 guest_unique =
+        resident.backing_bytes + resident.view_bytes - (std::min)(resident.view_bytes,
+                                                                  resident.both_bytes);
+    const u64 pipeline_estimate = (pipelines.graphics_built + pipelines.compute) * PipelineBytes;
+    const u64 heap_committed = win32_heaps.crt_committed + win32_heaps.other_committed;
+    // Older Windows builds report no private working set: the working set less the guest then.
+    const u64 private_ws = process.private_working_set != 0
+                               ? process.private_working_set
+                               : process.working_set - (std::min)(process.working_set, guest_unique);
+    const s64 residual = static_cast<s64>(private_ws) - static_cast<s64>(pipeline_estimate) -
+                         static_cast<s64>(pipelines.cache_data_bytes) -
+                         static_cast<s64>(heaps.host_usage) - static_cast<s64>(heap_committed);
+    const auto mib = [](u64 bytes) { return bytes >> 20; };
+    LOG_INFO(Render_Vulkan,
+             "Memory owners: working set {} = private {} + shared {}, private commit {}; guest "
+             "{} committed, resident {} backing + {} views - {} both = {} (views map {}, "
+             "sampled in {} us); pipelines {} graphics built of {} + {} compute, {} awaiting "
+             "destruction, ~{} at 0.45 MB each, pipeline cache data {}; VMA host {} used of {} "
+             "({} in blocks), device-local {} of {}; staging upload {} download {} device {} "
+             "stream {}; heaps CRT {} committed ({} allocated), {} others {} committed ({} "
+             "allocated, {} us); residual {} (MiB)",
+             mib(process.working_set), mib(private_ws),
+             mib(process.working_set - (std::min)(process.working_set, private_ws)),
+             mib(process.private_bytes), mib(commit.committed_bytes),
+             mib(resident.backing_bytes), mib(resident.view_bytes), mib(resident.both_bytes),
+             mib(guest_unique), mib(resident.view_mapped_bytes), resident.micros,
+             pipelines.graphics_built, pipelines.graphics_entries, pipelines.compute,
+             pipelines.awaiting_destruction, mib(pipeline_estimate),
+             mib(pipelines.cache_data_bytes), mib(heaps.host_usage), mib(heaps.host_budget),
+             mib(heaps.host_blocks), mib(heaps.local_usage), mib(heaps.local_budget),
+             mib(staging_pool.CachedBytes(MemoryUsage::Upload)),
+             mib(staging_pool.CachedBytes(MemoryUsage::Download)),
+             mib(staging_pool.CachedBytes(MemoryUsage::DeviceLocal)),
+             mib(staging_pool.StreamBufferBytes()), mib(win32_heaps.crt_committed),
+             mib(win32_heaps.crt_allocated), win32_heaps.heaps > 0 ? win32_heaps.heaps - 1 : 0,
+             mib(win32_heaps.other_committed), mib(win32_heaps.other_allocated),
+             win32_heaps.micros, residual / (s64{1} << 20));
 }
 } // Anonymous namespace
 
@@ -3249,6 +3313,14 @@ void NoteDrawReuseProbeFrame(); // vk_graphics_pipeline.cpp
 
 void RasterizerVulkan::TickFrame() {
     NoteDrawReuseProbeFrame();
+    if (MemoryOwnersEnabled()) {
+        static std::chrono::steady_clock::time_point last_owners_log{};
+        if (const auto now = std::chrono::steady_clock::now();
+            now - last_owners_log >= std::chrono::seconds{10}) {
+            last_owners_log = now;
+            LogMemoryOwners(device, pipeline_cache, staging_pool);
+        }
+    }
     if (VideoCore::Nx2Debug::HasRequests()) {
         if (auto capture = VideoCore::Nx2Debug::TakeCapture()) {
             // This build keeps the EDEN_NX2_FRAME_DUMP capture (file or time trigger) only.

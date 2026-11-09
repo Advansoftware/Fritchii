@@ -160,6 +160,16 @@ public:
 
     void TickFrame();
 
+    /// What the "Memory owners" log line counts here (GPU thread).
+    struct MemoryOwnerCounts {
+        size_t graphics_built{};       ///< Built graphics pipelines (each holds driver memory)
+        size_t graphics_entries{};     ///< graphics_cache entries, unbuilt ones included
+        size_t compute{};              ///< Compute pipelines, pending rebuilds included
+        size_t awaiting_destruction{}; ///< Evicted or retired, destroyed once the GPU is done
+        u64 cache_data_bytes{};        ///< vkGetPipelineCacheData's size, at most a minute old
+    };
+    [[nodiscard]] MemoryOwnerCounts MemoryOwners();
+
     [[nodiscard]] ComputePipeline* CurrentComputePipeline();
 
     void LoadDiskResources(u64 title_id, std::stop_token stop_loading,
@@ -563,6 +573,8 @@ private:
     size_t pipelines_since_flush{};
     std::chrono::steady_clock::time_point last_flush{};
     std::atomic<size_t> last_cache_size{};
+    /// When MemoryOwners last asked the driver for the cache data size.
+    std::chrono::steady_clock::time_point last_cache_size_query{};
     std::atomic_bool flush_in_flight{};
     std::atomic_bool save_again{};
 

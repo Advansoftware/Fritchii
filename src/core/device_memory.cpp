@@ -7,7 +7,10 @@
 #include <condition_variable>
 #include <mutex>
 
+#include <cstdlib>
+
 #include "common/logging.h"
+#include "common/memory_detect.h"
 #include "common/thread.h"
 #endif
 
@@ -27,6 +30,9 @@ DeviceMemory::DeviceMemory()
              VirtualReserveSize} {
 #ifdef _WIN32
     zero_trim_thread = std::jthread{[this](std::stop_token stop) { TrimZeroPages(stop); }};
+    if (const char* value = std::getenv("EDEN_NX2_MEM_OWNERS"); value == nullptr || value[0] != '0') {
+        memory_probe_thread = std::jthread{[this](std::stop_token stop) { ProbeMemory(stop); }};
+    }
 #endif
 }
 
@@ -66,6 +72,25 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
                  "Trimmed {} MiB of all-zero guest pages out of {} MiB resident in {} ms; the kernel "
                  "zero-filled {} MiB so far",
                  trimmed >> 20, resident >> 20, ms, Common::HostMemory::ZeroFilledBytes() >> 20);
+    }
+}
+
+void DeviceMemory::ProbeMemory(std::stop_token stop) {
+    Common::SetCurrentThreadName("MemoryProbe");
+    Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+    std::mutex mutex;
+    std::condition_variable_any wake;
+    while (true) {
+        {
+            std::unique_lock lock{mutex};
+            wake.wait_for(lock, stop, std::chrono::seconds{10}, [] { return false; });
+        }
+        if (stop.stop_requested()) {
+            return;
+        }
+        // Published for the GPU thread's line (Vulkan::LogMemoryOwners), which reads the last ones.
+        static_cast<void>(buffer.SampleResident());
+        static_cast<void>(Common::SampleHeapUsage());
     }
 }
 #endif
