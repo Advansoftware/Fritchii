@@ -211,7 +211,7 @@ private:
     [[nodiscard]] GraphicsPipeline* CurrentGraphicsPipelineClean(bool patch);
     /// The registers Refresh reads with these features, as (first word, words) ranges.
     /// `blend_by_value` (EXP50): the blend registers go to their own ranges.
-    void BuildCleanWatch(bool patch, bool blend_by_value);
+    void BuildCleanWatch(bool patch, bool blend_by_value, bool patch_vertex);
     [[nodiscard]] bool CleanInputsUnchanged() const;
     void TakeCleanSnapshot();
     [[nodiscard]] bool CleanBlendUnchanged() const;
@@ -225,6 +225,7 @@ private:
         bool built{};
         bool patch{};                  ///< Built for CurrentGraphicsPipelineClean(true)
         bool blend_by_value{};         ///< Built for EXP50: blend registers in blend_ranges
+        bool patch_vertex{};           ///< Built for EXP55: vertex attribute formats left out
         std::vector<Range> ranges;     ///< Read by every Refresh
         std::vector<Range> xfb_ranges; ///< Read while transform feedback is enabled
         /// With blend_by_value: the registers the attachments and the dual-source bit come from.
