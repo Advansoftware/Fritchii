@@ -566,6 +566,49 @@ void TextureCache<P>::TickFrame() {
             total_used_memory -= (std::min)(total_used_memory, runtime.PooledImageBytes());
         }
     }
+    // EDEN_NX2_MEM_TRACE=1 (from zortos293/Lichii#951): every 2 s, what the cache holds next to
+    // what the process and the driver report (memory climbs).
+    static const bool mem_trace = std::getenv("EDEN_NX2_MEM_TRACE") != nullptr;
+    if (const auto now = std::chrono::steady_clock::now();
+        mem_trace && now - mem_trace_time >= std::chrono::seconds{2}) {
+        mem_trace_time = now;
+        u64 image_bytes{};
+        u64 gpu_written_bytes{};
+        size_t images{};
+        size_t unbacked{};
+        for (const auto [image_id, image] : slot_images) {
+            ++images;
+            if (True(image->flags & ImageFlagBits::Unbacked)) {
+                ++unbacked;
+                continue;
+            }
+            const u64 bytes = GetScaledImageSizeBytes(*image);
+            image_bytes += bytes;
+            if (True(image->flags & ImageFlagBits::GpuModified)) {
+                gpu_written_bytes += bytes;
+            }
+        }
+        u64 decode_bytes{};
+        for (const auto& decode : async_decodes) {
+            // The worker sizes the buffer before it publishes complete.
+            if (decode->complete.load(std::memory_order_acquire)) {
+                decode_bytes += decode->decoded_data.capacity();
+            }
+        }
+        const u64 sentenced = std::accumulate(sentenced_image_bytes.begin(),
+                                              sentenced_image_bytes.end(), gpu_sentenced_bytes);
+        LOG_INFO(HW_GPU,
+                 "Memory trace: texture cache {} images {} MiB ({} MiB GPU-written, {} unbacked), "
+                 "device usage {} MiB (expected {} MiB, critical {} MiB), sentenced {} MiB, {} "
+                 "async decodes {} MiB, scratch {} MiB",
+                 images, image_bytes >> 20, gpu_written_bytes >> 20, unbacked,
+                 total_used_memory >> 20, expected_memory >> 20, critical_memory >> 20,
+                 sentenced >> 20, async_decodes.size(), decode_bytes >> 20,
+                 (swizzle_data_buffer.capacity() + unswizzle_data_buffer.capacity()) >> 20);
+        if constexpr (requires { runtime.LogMemoryTrace(); }) {
+            runtime.LogMemoryTrace();
+        }
+    }
     // Every 600 frames: device memory in use against the collector's thresholds.
     // Skip expensive heap allocation, map construction, and sorting unless debug logging is explicitly enabled.
     static const bool log_tc = std::getenv("EDEN_NX2_TC_LOG") != nullptr;

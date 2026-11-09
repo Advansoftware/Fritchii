@@ -5378,6 +5378,40 @@ void PipelineCache::TickFrame() {
     }
 }
 
+PipelineCache::MemoryOwnerCounts PipelineCache::MemoryOwners() {
+    MemoryOwnerCounts counts{};
+    counts.graphics_entries = graphics_cache.size();
+    for (const auto& [key, pipeline] : graphics_cache) {
+        if (pipeline != nullptr && pipeline->IsBuilt()) {
+            ++counts.graphics_built;
+        }
+    }
+    for (const auto& [key, entry] : compute_cache) {
+        counts.compute += entry.pipeline != nullptr ? 1 : 0;
+        counts.compute += entry.pending != nullptr && entry.pending->pipeline != nullptr ? 1 : 0;
+    }
+    counts.awaiting_destruction = evicted_pipelines.size() + retired_translations.size() +
+                                  retired_compute_pipelines.size();
+    // The VkPipelineCache object keeps every binary built this session in memory. Its size comes
+    // from the saves, and between them from a query once a minute on the serialization thread
+    // (some drivers serialize the whole cache to answer it), never while a save is under way.
+    if (use_vulkan_pipeline_cache && vulkan_pipeline_cache) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_cache_size_query >= std::chrono::minutes{1} &&
+            !flush_in_flight.load(std::memory_order_acquire)) {
+            last_cache_size_query = now;
+            serialization_thread.QueueWork([this] {
+                size_t size = 0;
+                if (vulkan_pipeline_cache.Read(&size, nullptr) == VK_SUCCESS) {
+                    last_cache_size.store(size, std::memory_order_relaxed);
+                }
+            });
+        }
+    }
+    counts.cache_data_bytes = last_cache_size.load(std::memory_order_relaxed);
+    return counts;
+}
+
 void PipelineCache::RetireTranslatedPipeline(std::unique_ptr<GraphicsPipeline> pipeline) {
     if (pipeline) {
         retired_translations.emplace_back(scheduler.CurrentTick(), std::move(pipeline));

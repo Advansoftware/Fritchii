@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cstring>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -121,6 +123,13 @@ void BufferCache<P>::TickFrame() {
     runtime.TickFrame(slot_buffers);
     if (!extent_probes.empty()) {
         CheckExtentProbes();
+    }
+    static const bool mem_trace = std::getenv("EDEN_NX2_MEM_TRACE") != nullptr;
+    if (static std::chrono::steady_clock::time_point last{}; mem_trace) {
+        if (const auto now = std::chrono::steady_clock::now(); now - last >= std::chrono::seconds{2}) {
+            last = now;
+            LOG_INFO(HW_GPU, "Memory trace: buffer cache {} MiB", buffer_bytes >> 20);
+        }
     }
     if (frame_tick % 600 == 0 && !uploaded_buffer_ranges.empty()) {
         for (const auto& [address, size] : uploaded_buffer_ranges) {

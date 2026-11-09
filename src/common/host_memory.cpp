@@ -55,6 +55,8 @@
 #endif // ^^^ POSIX ^^^
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -364,6 +366,20 @@ public:
             }
             ++it;
         }
+    }
+
+    /// The views mapped now: {virtual offset, length, backing offset} each (SampleResident).
+    std::vector<std::array<size_t, 3>> MappedViews() {
+        std::scoped_lock lock{placeholder_mutex};
+        std::vector<std::array<size_t, 3>> views;
+        views.reserve(placeholders.iterative_size());
+        for (const auto& interval : placeholders) {
+            const auto it = placeholder_host_pointers.find(interval.lower());
+            if (it != placeholder_host_pointers.end()) {
+                views.push_back({interval.lower(), interval.upper() - interval.lower(), it->second});
+            }
+        }
+        return views;
     }
 
     /// Backing offset the view page at virtual_offset maps, or nullopt when it is not mapped.
@@ -1183,6 +1199,79 @@ std::atomic<u64> g_zero_filled_bytes{};
 
 u64 HostMemory::ZeroFilledBytes() noexcept {
     return g_zero_filled_bytes.load(std::memory_order_relaxed);
+}
+
+namespace {
+std::mutex g_resident_mutex;
+HostMemory::ResidentSample g_resident_sample{};
+} // Anonymous namespace
+
+HostMemory::ResidentSample HostMemory::SampleResident(size_t stride_pages) const {
+    ResidentSample sample{};
+#ifdef _WIN32
+    if (backing_base == nullptr || stride_pages == 0) {
+        return sample;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const size_t stride = stride_pages * PageAlignment;
+    std::vector<PSAPI_WORKING_SET_EX_INFORMATION> entries;
+    entries.reserve(backing_size / stride + 1);
+    for (size_t offset = 0; offset < backing_size; offset += stride) {
+        entries.emplace_back().VirtualAddress = backing_base + offset;
+    }
+    const size_t backing_count = entries.size();
+    // Each view sample point is followed by its backing page, on the same grid of virtual
+    // offsets as everywhere else so the estimate stays unbiased.
+    if (impl && impl->virtual_base != nullptr) {
+        for (const auto& [virtual_offset, length, backing_offset] : impl->MappedViews()) {
+            sample.view_mapped_bytes += length;
+            const size_t end = virtual_offset + length;
+            for (size_t offset = Common::AlignUp(virtual_offset, stride); offset < end;
+                 offset += stride) {
+                const size_t host_offset = backing_offset + (offset - virtual_offset);
+                if (host_offset >= backing_size) {
+                    break;
+                }
+                entries.emplace_back().VirtualAddress = impl->virtual_base + offset;
+                entries.emplace_back().VirtualAddress = backing_base + host_offset;
+            }
+        }
+    }
+    // In slices, so page faults on the game's threads never wait long on the working set lock.
+    constexpr size_t Slice = 8192;
+    for (size_t first = 0; first < entries.size(); first += Slice) {
+        const size_t count = (std::min)(Slice, entries.size() - first);
+        if (!K32QueryWorkingSetEx(GetCurrentProcess(), entries.data() + first,
+                                  static_cast<DWORD>(count * sizeof(entries[0])))) {
+            return sample;
+        }
+    }
+    for (size_t i = 0; i < backing_count; ++i) {
+        if (entries[i].VirtualAttributes.Valid) {
+            sample.backing_bytes += stride;
+        }
+    }
+    for (size_t i = backing_count; i + 1 < entries.size(); i += 2) {
+        if (entries[i].VirtualAttributes.Valid) {
+            sample.view_bytes += stride;
+            if (entries[i + 1].VirtualAttributes.Valid) {
+                sample.both_bytes += stride;
+            }
+        }
+    }
+    sample.micros = static_cast<u32>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                         std::chrono::steady_clock::now() - start)
+                                         .count());
+    sample.valid = true;
+    std::scoped_lock lock{g_resident_mutex};
+    g_resident_sample = sample;
+#endif
+    return sample;
+}
+
+HostMemory::ResidentSample HostMemory::LastResidentSample() {
+    std::scoped_lock lock{g_resident_mutex};
+    return g_resident_sample;
 }
 
 std::pair<size_t, size_t> HostMemory::TrimZeroPages() const {
