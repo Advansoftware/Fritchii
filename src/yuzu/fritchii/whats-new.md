@@ -4,13 +4,19 @@ e.g. E:\OotRemakeEmulation\release\fritchii-vX\notes.md) here before the release
 download instructions at the top are dropped in the app. While this file holds only this comment,
 no "What's new" window pops up after an update (Help > What's New says there are no notes yet).
 -->
-## ⬇️ Download this file: **`Fritchii-v5.2-Windows-x64.zip`**
+## ⬇️ Download this file: **`Fritchii-v5.3-Windows-x64.zip`**
 
-On Fritchii v4, v4.1, v5 or v5.1 you don't need to download anything: it offers this update when you open it. Otherwise unzip it anywhere and run `Fritchii-v5.2\lichii.exe`. Don't download "Source code (zip)" or "Source code (tar.gz)": they contain no emulator.
+On Fritchii v4 to v5.2 you don't need to download anything: it offers this update when you open it. Otherwise unzip it anywhere and run `Fritchii-v5.3\lichii.exe`. Don't download "Source code (zip)" or "Source code (tar.gz)": they contain no emulator.
 
 ---
 
-Fritchii v5.2, crash fixes.
+Fritchii v5.3, AMD hotfix.
+
+- **AMD: Shader libraries are really off by default now.** v5.2 meant to turn them off on AMD's Windows driver but its check never matched, so RX 5000/6000 cards kept crashing while loading shaders. If you unticked the setting yourself, nothing changes for you.
+- **Updates retry by themselves.** When GitHub's file server answers with an error like 504 or the connection drops, Fritchii now tries again a couple of times before giving up (from the next update on).
+- **AMD players: please send us a log after "Preparing shaders".** On AMD the preparation skips most of OoT's shaders because they were recorded on an NVIDIA card. This version logs exactly why (Help > Export Log), so we can fix it next.
+
+### In v5.2
 
 - **GTX 10 series and older: invisible geometry is drawn again.** Objects the game draws with mesh shaders, which these cards lack, now go through a compute fallback (zortos's prototype, zortos293/Lichii#569, #642, #841). Some foliage or walls may still be missing or flicker.
 - **AMD: textures no longer write into other textures' memory.** Images whose size isn't a multiple of their block size wrote past their edge while being decoded. NVIDIA ignores that, AMD put it in other textures: black blocks, a crosshatch, and in the end a GPU crash. From CheezerWheezer's AMD fork.
