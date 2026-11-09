@@ -2114,8 +2114,13 @@ void RasterizerVulkan::DispatchCompute() {
     };
     const auto indirect_address = kepler_compute->GetIndirectComputeAddress();
     // The full-size 1080p pass is replaced only by FSR (native AA); DLAA through it is untested.
+    // So is the 3/4-scale pass zortos saw on Linux RADV (ef542df87cacfe9e, added with the FSR
+    // port): DLSS keeps the passes it replaced before it, after the owner saw a softer image.
+    constexpr u64 ThreeQuarterShader = 0xef542df87cacfe9eULL;
+    const bool fsr_only_pass = pipeline->ShaderHash() == ComputePipeline::OcarinaFullSizeShader ||
+                               pipeline->ShaderHash() == ThreeQuarterShader;
     const bool can_replace = OcarinaTemporalEnabled() && pipeline->CanReplaceOcarinaUpscale() &&
-                             (pipeline->ShaderHash() != ComputePipeline::OcarinaFullSizeShader ||
+                             (!fsr_only_pass ||
                               oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr) &&
                              !indirect_address && !frame_dump.Capturing();
     // Until a dispatch overwrites the scene, each direct one binds only after the effects are
@@ -2246,6 +2251,18 @@ void RasterizerVulkan::DispatchCompute() {
             : nullptr;
     if (!replacement) {
         scheduler.TraceComputePipeline(pipeline->ShaderHash());
+    } else {
+        // Once per pass: which of the game's upscale passes the upscaler took, and with what.
+        static std::array<u64, 8> logged{};
+        const u64 hash = pipeline->ShaderHash();
+        if (std::ranges::find(logged, hash) == logged.end()) {
+            if (const auto slot = std::ranges::find(logged, 0ULL); slot != logged.end()) {
+                *slot = hash;
+            }
+            LOG_INFO(Render_Vulkan, "Ocarina temporal: {} replaces the game's pass {:016x}",
+                     oot_backend == VideoCommon::OcarinaUpscaleBackend::Fsr ? "FSR" : "DLSS",
+                     hash);
+        }
     }
     scheduler.Record([this, pipeline, dim, byte_addressed_shadow, bind = std::move(deferred_bind),
                       barrier_recorded = barrier_first, replacement](vk::CommandBuffer cmdbuf) {
