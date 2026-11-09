@@ -51,6 +51,40 @@ static void OverrideWindowsFont() {
 }
 #endif
 
+// Fritchii: caps Windows' scale (passed through) so the primary screen keeps at least 1350x900
+// units for the windows, by a QT_SCALE_FACTOR below 1 when it would not. Leaves a
+// QT_SCALE_FACTOR the user set alone.
+static void FitHighDpiScaleToScreen() {
+#ifdef _WIN32
+    if (qEnvironmentVariableIsSet("QT_SCALE_FACTOR")) {
+        return;
+    }
+    qreal fit = 1.0;
+    {
+        int temp_argc = 0;
+        char** temp_argv = nullptr;
+        QApplication temp{temp_argc, temp_argv};
+        const QScreen* primary_screen = QGuiApplication::primaryScreen();
+        if (primary_screen == nullptr) {
+            return;
+        }
+        const qreal ratio = primary_screen->devicePixelRatio();
+        const QRect area = primary_screen->availableGeometry();
+        const qreal pixels_wide = area.width() * ratio;
+        const qreal pixels_high = area.height() * ratio;
+        constexpr qreal minimum_width = 1350.0;
+        constexpr qreal minimum_height = 900.0;
+        const qreal largest = std::min(pixels_wide / minimum_width, pixels_high / minimum_height);
+        if (ratio > 1.0 && largest < ratio) {
+            fit = std::max(1.0, largest) / ratio;
+        }
+    }
+    if (fit < 0.99) {
+        qputenv("QT_SCALE_FACTOR", QByteArray::number(fit, 'f', 3));
+    }
+#endif
+}
+
 static Qt::HighDpiScaleFactorRoundingPolicy GetHighDpiRoundingPolicy() {
 #ifdef _WIN32
     // For Windows, we want to avoid scaling artifacts on fractional scaling ratios.
@@ -271,12 +305,15 @@ int main(int argc, char* argv[]) {
     QGuiApplication::setDesktopFileName(QStringLiteral("io.github.zortos293.lichii"));
 #endif
 
-    // Fritchii: Windows' own scale, as set (125%, 150%, 175%). The rounding turned 150% on a 4K
-    // screen into 200% (windows bigger than asked, dialogs cut off) and 125% into 100% (tiny
-    // text). Qt 6 draws fractional scales without the old artifacts.
-    auto rounding_policy = FritchiiUi::Enabled()
-                               ? Qt::HighDpiScaleFactorRoundingPolicy::PassThrough
-                               : GetHighDpiRoundingPolicy();
+    // Fritchii: Windows' own scale (125%, 150%, 175%), as large as the screen leaves the windows
+    // the room they were laid out for (1350x900, the rounding's minimum below). The rounding
+    // turned a 4K screen at 150% into 200% and 125% into 100%; passing a large scale through as
+    // is left a 1440p screen at 175% only ~820 units tall, below Game Settings' OK button.
+    auto rounding_policy = GetHighDpiRoundingPolicy();
+    if (FritchiiUi::Enabled()) {
+        rounding_policy = Qt::HighDpiScaleFactorRoundingPolicy::PassThrough;
+        FitHighDpiScaleToScreen();
+    }
     QApplication::setHighDpiScaleFactorRoundingPolicy(rounding_policy);
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
