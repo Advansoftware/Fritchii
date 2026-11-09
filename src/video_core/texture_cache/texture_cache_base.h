@@ -614,6 +614,10 @@ private:
         u32 same_frame_refused{}; ///< Since the last report (render-frame clock line)
     };
     ::Common::unordered_map<u64, RelocationShape> relocation_shapes;
+    /// The guard by address too: OoT draws every dialogue box's text into a render target at one
+    /// address, sized to the box. Per shape, each new box size was relocated once before its
+    /// guard tripped, and that box's text showed other images' contents (2026-11-09, the owner).
+    ::Common::unordered_map<GPUVAddr, u8> relocation_guarded_addresses;
     /// Since the last report (TickFrame, every 600 frames once a candidate was seen).
     u64 relocation_candidates{};
     u64 relocation_guarded{};
