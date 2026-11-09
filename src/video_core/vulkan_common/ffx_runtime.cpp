@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <windows.h>
@@ -41,6 +42,19 @@ bool FilesPresent() {
 
 #ifdef _WIN32
 
+/// AMD signs with more than one name: its other signed files on a Ryzen PC read "Advanced Micro
+/// Devices Inc." (2026-11-09), and an exact "Advanced Micro Devices" would silently drop FSR 4 to
+/// FSR 3.1. The files are SHA-256 pinned as well, so the name only has to be AMD's.
+static bool IsAmdSignerName(std::wstring_view name) {
+    constexpr std::wstring_view Amd = L"Advanced Micro Devices";
+    if (!name.starts_with(Amd)) {
+        return false;
+    }
+    const std::wstring_view rest = name.substr(Amd.size());
+    return rest.empty() || rest == L" Inc." || rest == L", Inc." || rest == L" Inc" ||
+           rest == L", Inc" || rest == L" Incorporated";
+}
+
 bool IsSignedByAmd(const std::filesystem::path& path) {
     const std::wstring file_path = std::filesystem::absolute(path).wstring();
     WINTRUST_FILE_INFO file{};
@@ -65,7 +79,7 @@ bool IsSignedByAmd(const std::filesystem::path& path) {
         valid = cert &&
                 CertGetNameStringW(cert->pCert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, name,
                                    static_cast<DWORD>(std::size(name))) > 1 &&
-                std::wstring_view{name} == L"Advanced Micro Devices";
+                IsAmdSignerName(name);
     }
     data.dwStateAction = WTD_STATEACTION_CLOSE;
     WinVerifyTrust(nullptr, &action, &data);
