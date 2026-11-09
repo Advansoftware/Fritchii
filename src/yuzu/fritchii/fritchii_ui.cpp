@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QBuffer>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFont>
@@ -24,6 +25,7 @@
 #include <QPixmap>
 #include <QProxyStyle>
 #include <QPushButton>
+#include <QUrl>
 #include <QScrollArea>
 #include <QStyleFactory>
 
@@ -262,6 +264,12 @@ void RestructureMenus(Ui::MainWindow& ui, QMainWindow& window, const MenuHooks& 
     ui.menu_Help->insertAction(first_help, delete_cache);
     ui.menu_Help->insertSeparator(first_help);
     ui.menu_Help->insertAction(first_help, whats_new);
+    auto* discord = new QAction(Icon(QStringLiteral("community"), 16), tr("Fritchii &Discord"), &window);
+    QObject::connect(discord, &QAction::triggered, &window, [] { OpenDiscord(); });
+    auto* donate = new QAction(Icon(QStringLiteral("heart"), 16), tr("D&onate"), &window);
+    QObject::connect(donate, &QAction::triggered, &window, [] { OpenDonate(); });
+    ui.menu_Help->insertAction(first_help, discord);
+    ui.menu_Help->insertAction(first_help, donate);
 
     // Plain names.
     ui.menu_recent_files->setTitle(tr("Open &Recent"));
@@ -517,6 +525,14 @@ bool RestoreSettingsFiles(const QString& backup) {
 QString& PendingSettingsRestore() {
     static QString pending;
     return pending;
+}
+
+void OpenDiscord() {
+    QDesktopServices::openUrl(QUrl(QString::fromLatin1(DiscordInvite)));
+}
+
+void OpenDonate() {
+    QDesktopServices::openUrl(QUrl(QString::fromLatin1(DonateLink)));
 }
 
 namespace {
