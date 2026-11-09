@@ -134,6 +134,7 @@ add_library(video_core STATIC
     nx2_qmd_prediction.h
     nx2_perf.h
     nx2_download_trace.h
+    nx2_async_readback.h
     pending_maps.h
     present.h
     pte_kind.h
