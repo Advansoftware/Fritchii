@@ -1024,6 +1024,9 @@ extern Values values;
 constexpr u32 MIN_FRAME_GEN_MULTIPLIER = 2;
 constexpr u32 MAX_FRAME_GEN_MULTIPLIER = 4;
 
+/// Whether frame generation runs: the setting, and never in Fritchii builds, which hide its
+/// settings (a value left on by an older build made the camera flicker, 2026-11-09).
+[[nodiscard]] bool FrameGenActive();
 [[nodiscard]] u32 FrameGenMultiplier();
 
 [[nodiscard]] size_t FrameGenGenerations();
