@@ -179,7 +179,17 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
             (!high_priority_mode && must_download)) {
             return false;
         }
+        // EDEN_NX2_EXP57 (live, 0 = off): at most one download with a full wait for the GPU per
+        // frame unless an allocation failed. A player's first high-priority pass downloaded
+        // image after image and froze for 3 s (fable52_answer_3 s7); the rest wait for later
+        // frames.
+        if (must_download && !out_of_memory && VideoCore::Nx2Debug::Experiment(57) != 0 &&
+            gc_waited_frame == frame_tick) {
+            ++gc_downloads_deferred;
+            return false;
+        }
         if (must_download) {
+            gc_waited_frame = frame_tick;
             auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
             const auto copies = FullDownloadCopies(image.info);
             image.DownloadMemory(map, copies);
@@ -660,9 +670,9 @@ void TextureCache<P>::TickFrame() {
         if constexpr (requires { runtime.LogMemoryStatistics(); }) {
             runtime.LogMemoryStatistics();
         }
-        LOG_INFO(HW_GPU, "Texture cache last 600 frames: created {} images, deleted {} (collector {}, {} costly, {} downloaded), {} async decodes, ASTC {} opaque / {} alpha",
+        LOG_INFO(HW_GPU, "Texture cache last 600 frames: created {} images, deleted {} (collector {}, {} costly, {} downloaded, {} downloads deferred), {} async decodes, ASTC {} opaque / {} alpha",
                  images_created, images_deleted, gc_deletes + gc_costly_deletes, gc_costly_deletes,
-                 gc_download_deletes,
+                 gc_download_deletes, gc_downloads_deferred,
                  async_decodes_queued, astc_opaque_images, astc_alpha_images);
         LOG_INFO(HW_GPU, "Texture cache last 600 frames: {} uploads from guest memory, {} MiB (largest {} MiB, {} by layer)",
                  images_uploaded, uploaded_bytes >> 20, largest_upload >> 20, layer_uploads);
@@ -687,7 +697,8 @@ void TextureCache<P>::TickFrame() {
         created_shapes.clear();
         // The per-image and per-shape tallies only feed debug lines: skip them while those are off.
         debug_stats = Common::Log::IsLevelEnabled(Common::Log::Class::HW_GPU, Common::Log::Level::Debug);
-        gc_deletes = gc_costly_deletes = gc_download_deletes = async_decodes_queued = 0;
+        gc_deletes = gc_costly_deletes = gc_download_deletes = gc_downloads_deferred =
+            async_decodes_queued = 0;
         images_created = images_deleted = 0;
     }
     SweepColdImages();
@@ -3609,16 +3620,18 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     // A new render target that the clear binding it overwrites whole (every channel, the whole
     // image) needs no upload from guest memory first: Ocarina of Time creates ~4 such targets a
     // frame outdoors, and uploading them was ~15% of the GPU back thread.
+    // Which test refused the last call (EXP7's new-image line).
+    const char* clear_refusal = "";
     const auto overwritten_by_clear = [&] {
         if (!clearing_render_targets || !join_copies_to_do.empty() ||
             new_info.type != ImageType::e2D || new_info.resources.levels != 1 ||
             new_info.resources.layers != 1 || new_info.num_samples != 1) {
-            return false;
+            return (clear_refusal = "not clearing, joins, or not a plain 2D target", false);
         }
         const auto& regs = maxwell3d->regs;
         const auto& surface = regs.clear_surface;
         if (surface.layer != 0) {
-            return false;
+            return (clear_refusal = "clear layer", false);
         }
         const u32 width = new_info.size.width;
         const u32 height = new_info.size.height;
@@ -3626,34 +3639,47 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             const auto& scissor = regs.scissor_test[0];
             if (scissor.min_x != 0 || scissor.min_y != 0 || scissor.max_x < width ||
                 scissor.max_y < height) {
-                return false;
+                return (clear_refusal = "scissor", false);
             }
         }
         // The clear covers the framebuffer's render area, the smallest bound target.
+        // EDEN_NX2_EXP56 (live, 0 = off): not for the clear's own depth target, which follows
+        // IsFullClear as an existing one does (its contents are dropped, the colour targets'
+        // sizes aside). Ocarina binds a 1920x1024 depth buffer under 1280x720 colour and this
+        // rule uploaded its 7.5 MiB from guest memory every frame (fable52_answer_3 s7).
+        const bool depth_follows_full_clear = VideoCore::Nx2Debug::Experiment(56) != 0 &&
+                                              regs.zeta_enable && regs.zeta.Address() == gpu_addr;
         for (u32 index = 0; index < regs.rt_control.count && index < NUM_RT; ++index) {
             const auto& rt = regs.rt[index];
-            if (rt.Address() != 0 && rt.format != Tegra::RenderTargetFormat::NONE &&
+            if (!depth_follows_full_clear && rt.Address() != 0 &&
+                rt.format != Tegra::RenderTargetFormat::NONE &&
                 (rt.width < width || rt.height < height)) {
-                return false;
+                return (clear_refusal = "a smaller colour target", false);
             }
         }
         if (regs.zeta_enable && regs.zeta.Address() != 0 &&
             (regs.zeta_size.width < width || regs.zeta_size.height < height)) {
-            return false;
+            return (clear_refusal = "a smaller depth target", false);
         }
         const bool is_depth_target = regs.zeta_enable && regs.zeta.Address() == gpu_addr;
         const bool full_stencil = surface.S && regs.stencil_front_mask == 0xFF;
         switch (VideoCore::Surface::GetFormatType(new_info.format)) {
         case VideoCore::Surface::SurfaceType::ColorTexture: {
             const u32 index = surface.RT;
-            return surface.R && surface.G && surface.B && surface.A && index < NUM_RT &&
-                   index < regs.rt_control.count && regs.rt[index].Address() == gpu_addr;
+            const bool covered = surface.R && surface.G && surface.B && surface.A &&
+                                 index < NUM_RT && index < regs.rt_control.count &&
+                                 regs.rt[index].Address() == gpu_addr;
+            clear_refusal = covered ? "" : "colour channels or target";
+            return covered;
         }
         case VideoCore::Surface::SurfaceType::Depth:
+            clear_refusal = (is_depth_target && surface.Z) ? "" : "depth: not the bound target or no Z";
             return is_depth_target && surface.Z;
         case VideoCore::Surface::SurfaceType::Stencil:
+            clear_refusal = (is_depth_target && full_stencil) ? "" : "stencil: not the bound target or mask";
             return is_depth_target && full_stencil;
         case VideoCore::Surface::SurfaceType::DepthStencil:
+            clear_refusal = (is_depth_target && surface.Z && full_stencil) ? "" : "depth-stencil: not bound, no Z or stencil mask";
             return is_depth_target && surface.Z && full_stencil;
         default:
             return false;
@@ -3875,7 +3901,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     // EDEN_NX2_EXP8 bit 2: skip the upload the copies overwrite.
     const bool copy_skip =
         !clear_skip && (VideoCore::Nx2Debug::Experiment(8) & 2) != 0 && overwritten_by_copies();
-    if (VideoCore::Nx2Debug::Experiment(7) != 0 && new_image.guest_size_bytes >= 4_MiB)
+    if (VideoCore::Nx2Debug::Experiment(7) != 0 && new_image.guest_size_bytes >= 1_MiB)
         [[unlikely]] {
         // Why a large new image was (or was not) uploaded from guest memory.
         static std::atomic<u32> logged{};
@@ -3890,7 +3916,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             LOG_WARNING(HW_GPU,
                         "New image format {} {}x{}x{} levels {} layers {} at {:#x}: {} copies "
                         "({} aliases, {} GPU-written), {} bad overlaps, clearing {}, covered {}, "
-                        "upload {}",
+                        "upload {}{}{}",
                         static_cast<u32>(new_info.format), new_info.size.width,
                         new_info.size.height, new_info.size.depth, new_info.resources.levels,
                         new_info.resources.layers, new_image.gpu_addr, join_copies_to_do.size(),
@@ -3898,7 +3924,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
                         clearing_render_targets, overwritten_by_copies(),
                         clear_skip  ? "skipped (clear)"
                         : copy_skip ? "skipped (copies)"
-                                    : "done");
+                                    : "done",
+                        clear_skip || clear_refusal[0] == ' ' ? "" : ", clear refused: ",
+                        clear_skip ? "" : clear_refusal);
         }
     }
     const auto refresh_start = std::chrono::steady_clock::now();
