@@ -385,8 +385,15 @@ struct Values {
                                                            Specialization::Percentage,
                                                        true,
                                                        true};
-    // NVIDIA DLSS (through NVIDIA Streamline) in place of a game's DLSS.
-    SwitchableSetting<bool> nvidia_dlss{linkage, false, "nvidia_dlss", Category::Renderer};
+    // NVIDIA DLSS (through NVIDIA Streamline) in place of a game's DLSS. Global only: a per-game
+    // value (left in some players' OoT configs) silently overrode the checkbox, which then showed
+    // unchecked and greyed once the game ran (2026-11-09, an RTX 5080 player).
+    Setting<bool> nvidia_dlss{linkage, false, "nvidia_dlss", Category::Renderer};
+    // The DLSS model (preset) for every mode: K by default (NVIDIA's defaults for Performance and
+    // Ultra Performance drew thin lines); Default leaves the choice to NVIDIA. EDEN_NX2_DLSS_PRESET
+    // still overrides it.
+    Setting<DlssPreset> nvidia_dlss_preset{linkage, DlssPreset::K, "nvidia_dlss_preset",
+                                           Category::Renderer};
     SwitchableSetting<AspectRatio, true> aspect_ratio{linkage,
                                                       AspectRatio::R16_9,
                                                       "aspect_ratio",
