@@ -385,6 +385,26 @@ TEST_CASE("Fritchii picks the newest newer release that has a package", "[update
     CHECK_FALSE(UpdateChecker::SelectFritchiiUpdate({}, {4, 0}, source));
 }
 
+TEST_CASE("Fritchii never offers a release whose notes hide it from the updater", "[updater]") {
+    const auto make = [](const std::string& tag, const std::string& name, std::string body) {
+        auto release = MakeFritchiiRelease(tag, {GitHubUrl("Lichii", tag, name)});
+        release.body = std::move(body);
+        return release;
+    };
+    const auto releases = std::array{
+        make("fritchii-v5.6", "Fritchii-v5.6-Windows-x64.zip", "Real notes"),
+        make("fritchii-v9", "Fritchii-v9-Windows-x64.zip",
+             "Big news!\n<!-- fritchii:no-update -->\nMore text"),
+    };
+    const auto source = UpdateChecker::DefaultSource();
+    CHECK(UpdateChecker::HiddenFromUpdater(releases[1]));
+    CHECK_FALSE(UpdateChecker::HiddenFromUpdater(releases[0]));
+    const auto update = UpdateChecker::SelectFritchiiUpdate(releases, {5, 5}, source);
+    REQUIRE(update);
+    CHECK(update->tag == "fritchii-v5.6");
+    CHECK_FALSE(UpdateChecker::SelectFritchiiUpdate(releases, {5, 6}, source));
+}
+
 TEST_CASE("EDEN_UPDATE_URL takes https anywhere and plain http only on loopback", "[updater]") {
     const auto local = UpdateChecker::ParseSourceOverride("http://127.0.0.1:8000/releases.json");
     REQUIRE(local);

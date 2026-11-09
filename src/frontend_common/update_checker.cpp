@@ -295,12 +295,21 @@ std::optional<Common::Net::Asset> SelectFritchiiAsset(const Common::Net::Release
     return std::nullopt;
 }
 
+bool HiddenFromUpdater(const Common::Net::Release& release) {
+    return release.body.find(HiddenReleaseMarker) != std::string::npos;
+}
+
 std::optional<Common::Net::Release> SelectFritchiiUpdate(
     std::span<const Common::Net::Release> releases, const FritchiiVersion& current,
     const Source& source) {
     const Common::Net::Release* selected = nullptr;
     FritchiiVersion newest = current;
     for (const auto& release : releases) {
+        if (HiddenFromUpdater(release)) {
+            LOG_INFO(Frontend, "Update check skips {}: its notes hide it from the updater",
+                     release.tag);
+            continue;
+        }
         const auto version = ParseFritchiiTag(release.tag);
         if (version && *version > newest && SelectFritchiiAsset(release, source)) {
             newest = *version;

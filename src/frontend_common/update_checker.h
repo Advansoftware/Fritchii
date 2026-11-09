@@ -89,7 +89,15 @@ std::optional<Source> ParseSourceOverride(std::string_view url);
 std::optional<Common::Net::Asset> SelectFritchiiAsset(const Common::Net::Release& release,
                                                       const Source& source);
 
-// The newest release that is newer than `current` and has a Windows package.
+// Put in a release's notes to keep the updater from ever offering it (a joke release, a test
+// build): an HTML comment, so GitHub shows nothing of it on the release page.
+inline constexpr std::string_view HiddenReleaseMarker = "<!-- fritchii:no-update -->";
+
+// Whether the release's notes carry HiddenReleaseMarker.
+[[nodiscard]] bool HiddenFromUpdater(const Common::Net::Release& release);
+
+// The newest release that is newer than `current`, has a Windows package and isn't hidden from
+// the updater.
 std::optional<Common::Net::Release> SelectFritchiiUpdate(
     std::span<const Common::Net::Release> releases, const FritchiiVersion& current,
     const Source& source);
