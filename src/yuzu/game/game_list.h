@@ -88,6 +88,11 @@ public:
 
     void ResetViewMode();
 
+    /// The game's right-click menu, for another view of the same game (Fritchii's home card).
+    void AddGameMenu(QMenu& context_menu, u64 program_id, const std::string& path) {
+        AddGamePopup(context_menu, program_id, path);
+    }
+
 public slots:
     void SetNupConversionRunning(bool running);
     void RefreshGameDirectory();

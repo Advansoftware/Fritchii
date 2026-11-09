@@ -123,6 +123,10 @@ void MainWindow::SetUpFritchiiUi() {
                 OpenPerGameConfiguration(program_id, path);
             },
         .delete_shader_cache = delete_shader_cache,
+        .game_menu =
+            [this](QMenu& menu, u64 program_id, const std::string& path) {
+                game_list->AddGameMenu(menu, program_id, path);
+            },
         .game_list_empty = [this] { return game_list->IsEmpty(); },
         .single_window = [this] { return ui->action_Single_Window_Mode->isChecked(); },
         .emulation_running = [this] { return emulation_running; },

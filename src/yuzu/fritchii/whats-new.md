@@ -14,6 +14,7 @@ Fritchii v5.2, crash fixes.
 
 - **AMD: textures no longer write into other textures' memory.** Images whose size isn't a multiple of their block size wrote past their edge while being decoded. NVIDIA ignores that, AMD put it in other textures: black blocks, a crosshatch, and in the end a GPU crash. From CheezerWheezer's AMD fork.
 - **AMD (Windows driver): Shader libraries are off by default.** RX 5000 and 6000 cards crashed building them; unticking the setting was the workaround, now it's automatic. NVIDIA keeps them.
+- **The full right-click menu is back on the home screen** (Open Mod Data Location, Dump RomFS, Remove, Verify Integrity, Start Game without Custom Configuration...), for modders.
 - **No more crash when the PC's memory budget is reached** during long sessions (seen in Castle Town after half an hour). Buffers in system memory may now go over Windows' budget, like textures already could. Also from CheezerWheezer's AMD fork.
 
 ### In v5.1

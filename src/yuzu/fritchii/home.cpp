@@ -244,10 +244,16 @@ QWidget* Home::MakePage() {
         if (hero_path.isEmpty()) {
             return;
         }
+        // The game list's full menu (modders use its folders and dumps), then Delete Shader Cache.
         QMenu menu;
-        menu.addAction(tr("Game Settings..."), &menu, [this] {
-            hooks.game_settings(hero_id, hero_path.toStdString());
-        });
+        if (hooks.game_menu) {
+            hooks.game_menu(menu, hero_id, hero_path.toStdString());
+        } else {
+            menu.addAction(tr("Game Settings..."), &menu, [this] {
+                hooks.game_settings(hero_id, hero_path.toStdString());
+            });
+        }
+        menu.addSeparator();
         menu.addAction(tr("Delete Shader Cache..."), &menu,
                        [this] { hooks.delete_shader_cache(hero_id); });
         menu.exec(page->mapToGlobal(pos));
