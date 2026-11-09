@@ -446,7 +446,22 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
     VkMemoryPropertyFlags property_flags{};
 
     if (!CreateBufferInSeparatePool(ci, usage, alloc_ci, handle, allocation, alloc_info)) {
-        vk::Check(vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info));
+        VkResult result = vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation,
+                                          &alloc_info);
+        // Staging buffers live in system memory, where the budget is the OS's soft hint: going
+        // over it pages, refusing aborted the emulator (a texture upload in Ocarina's town
+        // square after 36 minutes). Device-local buffers keep the budget.
+        if ((result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_OUT_OF_HOST_MEMORY) &&
+            usage != MemoryUsage::DeviceLocal) {
+            VmaAllocationCreateInfo over_budget = alloc_ci;
+            over_budget.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+            result = vmaCreateBuffer(allocator, &ci, &over_budget, &handle, &allocation,
+                                     &alloc_info);
+            LOG_WARNING(Render_Vulkan,
+                        "Buffer of {} KiB (usage {}) over the memory budget: {}", ci.size >> 10,
+                        static_cast<u32>(usage), result == VK_SUCCESS ? "made anyway" : "failed");
+        }
+        vk::Check(result);
     }
     vmaGetAllocationMemoryProperties(allocator, allocation, &property_flags);
 
