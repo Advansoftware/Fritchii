@@ -267,6 +267,16 @@ struct FixedPipelineState {
     /// attachments. Clears the flag.
     void RefreshBlending(Tegra::Engines::Maxwell3D& maxwell3d);
 
+    /// attachments[index] as RefreshBlending builds it from `regs` (zortos293/Lichii#717,
+    /// the-cashman's BlendingFor).
+    [[nodiscard]] BlendingAttachment BlendingFor(const Maxwell& regs, size_t index) const;
+
+    /// Whether the attachments equal what RefreshBlending would build from `regs` (and, with
+    /// `canonical`, what CanonicalizeNative then keeps of them, against this state's colour
+    /// formats). Reads the registers, never Dirty::Blending, so a blend register written without
+    /// raising the flag is still seen. Only meaningful without dynamic blend state.
+    [[nodiscard]] bool BlendingMatches(const Maxwell& regs, bool canonical) const;
+
     /// attribute_types as Refresh computes it with dynamic vertex input.
     [[nodiscard]] static u64 DynamicAttributeTypes(const Maxwell& regs) noexcept;
 
