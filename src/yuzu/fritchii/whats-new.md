@@ -21,12 +21,14 @@ Fritchii v5.6.
 - **The opening cutscenes and the main menu video stay in sync with their audio.** The game only shows about 30 frames a second on those screens, so the 60 fps videos played at half speed while the music kept going (almost 7 seconds behind after 12 seconds). Videos now show the frame that matches the audio and skip the rest. A broken video frame or a failing decoder can no longer crash the game.
 - **The Song of Time no longer ends with a loud crackle** (zortos293/Lichii#1073 by justin-wq1337).
 - **No more freezes of up to 3 seconds** when the game swaps a compute shader mid-play (zortos293/Lichii#969 by El-Sashok).
-- **Unlocking the speed limit no longer makes OoT run fast.** Above 60 fps the whole game sped up; it now stays at its normal speed. Turbo and Slow still work as fast-forward and slow motion.
+- **Unlocking the speed limit no longer makes OoT run fast.** Above 60 fps the whole game sped up; it now stays at its normal speed. Turbo and Slow still work as fast-forward and slow motion. In OoT, Ctrl+U now switches the high refresh rate mode instead (see New).
 - **Opening the ocarina without a microphone no longer crashes the game** (zortos293/Lichii#497 and #881, via Fritchii #16).
 - Mods that patch the same spot as Fritchii's built-in patches win over them (Fritchii #5). Game titles from NUP files show properly (Fritchii #20). Empty controller mapping values are no longer lost (Fritchii #30 by FFcustoms). Fritchii builds on Linux again (Fritchii #19).
 - **Help > Export Log always sends this session's log.** A Fritchii that never finished closing (for example after an update) could keep the log file locked, and the export then sent an old log.
 
 #### New
+- **High refresh rate (experimental): press Ctrl+U in OoT to go above 60 fps** at normal game speed, and again to go back, no restart needed. The cap is in Graphics > Advanced (your monitor's refresh rate, 90, 120, 144 or 165), and the Graphics checkbox follows Ctrl+U. Water ripples keep moving above 60 too (zortos293/Lichii#1152, after #655 by atk3001). It's new: tell us if a timer, cutscene or minigame acts weird with it on. The 30 FPS mode still wins over it.
+- **Dark's standalone Dynamic FPS mod is skipped and hidden automatically**, since Fritchii has it built in (the mod also blocked the high refresh mode). Your files aren't touched. If you turned the built-in off in Add-Ons to use the mod, nothing changes for you.
 - **Reset to Defaults** (Settings > General) puts every setting back to Fritchii's own tuned settings, after saving a backup. **Restore Settings** brings any saved set back. Controls and game folders stay.
 - **"My settings don't apply" explained:** when OoT has its own values in Configure Game, the Settings window now says so at the top, with one button to put OoT back on your global settings. Export Log lists them too.
 - **RAM and VRAM in the performance overlay**, with how much your PC has left (amber when it's getting low).
