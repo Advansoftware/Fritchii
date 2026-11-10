@@ -109,10 +109,6 @@ constexpr std::array<u8, 120> DYNAMIC_FPS_ROUTINE{
     0x03, 0x09, 0x23, 0x1E, 0x40, 0x20, 0x23, 0x1E, 0x4D, 0x00, 0x00, 0x54,
     0x48, 0x40, 0x20, 0x1E, 0xC0, 0x03, 0x5F, 0xD6, 0x0A, 0xD7, 0x83, 0x3F,
 };
-constexpr std::array DYNAMIC_FPS_RECORDS{
-    BuiltinPatchRecord{.module_offset = 0x6E6CC4, .bytes = DYNAMIC_FPS_CALL},
-    BuiltinPatchRecord{.module_offset = 0x3C46200, .bytes = DYNAMIC_FPS_ROUTINE},
-};
 
 // High refresh rate (experimental, Settings oot_high_refresh): Dark's routine with the tail of
 // zortos293/Lichii#655 ("FPS Unlock", by atk3001): the smoothed real-time step is always
@@ -202,11 +198,15 @@ static_assert(OotHighRefreshCode::CallOffset == 0x6E6CC4 &&
               OotHighRefreshCode::CaveSize == OOT_CAVE_SIZE &&
               OotHighRefreshCode::ScaleOffset == HIGH_REFRESH_ROUTINE_OFFSET + HIGH_REFRESH_SCALE);
 
-// The call to our routine, Dark's routine (so the mode can switch off live), the water hook (over
-// its fcvtzs), then our cave one word at a time, each checked to be zero in the module.
-constexpr auto HIGH_REFRESH_RECORDS = [] {
+// The call (to our routine or to Dark's), Dark's routine (so the mode can switch live), the water
+// hook (over its fcvtzs), then our cave one word at a time, each checked to be zero in the module.
+// Since v5.8 (zortos293/Lichii#1180's finding, 2026-11-10) Dark's mode gets the same hook and
+// cave too, through the separate ripple built-in: with his Dynamic FPS alone the ripples ran
+// trunc(step) passes, so at a 60 fps cap (step 0.998-1.003) some frames ran none and below 60
+// they ran slow (1.33 -> 1). With both, the call word is the only difference between the modes.
+constexpr auto MakeOotRecords(std::span<const u8> call) {
     std::array<BuiltinPatchRecord, 3 + OOT_CAVE_SIZE / 4> records{};
-    records[0] = BuiltinPatchRecord{.module_offset = 0x6E6CC4, .bytes = HIGH_REFRESH_CALL};
+    records[0] = BuiltinPatchRecord{.module_offset = 0x6E6CC4, .bytes = call};
     records[1] = BuiltinPatchRecord{.module_offset = 0x3C46200, .bytes = DYNAMIC_FPS_ROUTINE};
     records[2] = BuiltinPatchRecord{.module_offset = WATER_HOOK_OFFSET,
                                     .bytes = WATER_HOOK,
@@ -219,7 +219,24 @@ constexpr auto HIGH_REFRESH_RECORDS = [] {
                                         .original = 0};
     }
     return records;
+}
+constexpr auto HIGH_REFRESH_RECORDS = MakeOotRecords(HIGH_REFRESH_CALL);
+// Dark's Dynamic FPS: his call and routine only, as always (IsBuiltinDynamicFpsMod tells his
+// standalone mod by these two records).
+constexpr std::array DYNAMIC_FPS_RECORDS{
+    BuiltinPatchRecord{.module_offset = 0x6E6CC4, .bytes = DYNAMIC_FPS_CALL},
+    BuiltinPatchRecord{.module_offset = 0x3C46200, .bytes = DYNAMIC_FPS_ROUTINE},
+};
+// The water ripples with Dark's Dynamic FPS (its own built-in, applied after his): the water hook
+// and our cave, the same words the high refresh mode has, without its call. Skipped when the
+// high refresh mode already wrote them, or when another mod holds any of those spots.
+constexpr auto WATER_RIPPLE_RECORDS = [] {
+    std::array<BuiltinPatchRecord, 1 + OOT_CAVE_SIZE / 4> records{};
+    const auto all = MakeOotRecords(DYNAMIC_FPS_CALL);
+    std::ranges::copy(std::span{all}.subspan(2), records.begin());
+    return records;
 }();
+constexpr std::string_view WATER_RIPPLE_NAME = "Water ripples at any frame rate (built-in)";
 constexpr std::string_view DYNAMIC_FPS_NAME = "Dynamic FPS by Dark (built-in)";
 constexpr std::string_view HIGH_REFRESH_NAME = "High refresh rate (built-in, experimental)";
 
@@ -289,6 +306,17 @@ constexpr std::array BUILTIN_PATCHES{
         .module = "main",
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = DYNAMIC_FPS_RECORDS,
+    },
+    // After Dark's (v5.8, zortos293/Lichii#1180's finding): his mode ran trunc(step) ripple
+    // passes, so at a 60 fps cap some frames ran none and below 60 the ripples ran slow.
+    BuiltinPatch{
+        .name = WATER_RIPPLE_NAME,
+        .title_id = 0x0400486024DEC000,
+        .module = "main",
+        .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
+        .records = WATER_RIPPLE_RECORDS,
+        .state_offset = HIGH_REFRESH_STATE_OFFSET,
+        .state_size = HIGH_REFRESH_STATE_SIZE,
     },
     BuiltinPatch{
         .name = "Occlusion Off (built-in, EDEN_NX2_OCCLUSION_OFF=1)",
@@ -1672,6 +1700,7 @@ OotHighRefreshLayout GetOotHighRefreshLayout(const OotHighRefreshCode& code) {
     if (code.dark != DYNAMIC_FPS_ROUTINE) {
         return OotHighRefreshLayout::Unknown;
     }
+    // Before v5.8 Dark's mode had no water hook and a free cave; still switchable.
     if (code.call == DYNAMIC_FPS_CALL && code.water == WATER_ORIGINAL && code.cave == FREE_CAVE) {
         return OotHighRefreshLayout::Off;
     }
@@ -1679,16 +1708,21 @@ OotHighRefreshLayout GetOotHighRefreshLayout(const OotHighRefreshCode& code) {
     const auto cave = std::span<const u8>{code.cave};
     const auto ours = std::span<const u8>{HIGH_REFRESH_CAVE};
     constexpr size_t after_scale = HIGH_REFRESH_SCALE + 4;
-    if (code.call == HIGH_REFRESH_CALL && code.water == WATER_HOOK &&
+    const bool our_cave =
+        code.water == WATER_HOOK &&
         std::ranges::equal(cave.first(HIGH_REFRESH_SCALE), ours.first(HIGH_REFRESH_SCALE)) &&
-        std::ranges::equal(cave.subspan(after_scale), ours.subspan(after_scale))) {
+        std::ranges::equal(cave.subspan(after_scale), ours.subspan(after_scale));
+    if (our_cave && code.call == HIGH_REFRESH_CALL) {
         return OotHighRefreshLayout::On;
+    }
+    if (our_cave && code.call == DYNAMIC_FPS_CALL) {
+        return OotHighRefreshLayout::Off;
     }
     return OotHighRefreshLayout::Unknown;
 }
 
 std::optional<OotHighRefreshCode> SwitchOotHighRefreshCode(const OotHighRefreshCode& code,
-                                                           bool on) {
+                                                           bool on, bool ripples) {
     const OotHighRefreshLayout layout = GetOotHighRefreshLayout(code);
     if (layout == OotHighRefreshLayout::Unknown) {
         return std::nullopt;
@@ -1698,8 +1732,12 @@ std::optional<OotHighRefreshCode> SwitchOotHighRefreshCode(const OotHighRefreshC
     }
     OotHighRefreshCode switched = code;
     switched.call = on ? HIGH_REFRESH_CALL : DYNAMIC_FPS_CALL;
-    switched.water = on ? WATER_HOOK : WATER_ORIGINAL;
-    switched.cave = on ? HIGH_REFRESH_CAVE : FREE_CAVE;
+    // Both modes keep the water hook and the cave (v5.8): only the call and the speed scale word
+    // change, so no code a thread may be running changes under it. Unless the player turned the
+    // ripple built-in off: then Dark's mode has neither, as before.
+    const bool keep = on || ripples;
+    switched.water = keep ? WATER_HOOK : WATER_ORIGINAL;
+    switched.cave = keep ? HIGH_REFRESH_CAVE : FREE_CAVE;
     return switched;
 }
 
@@ -1742,7 +1780,11 @@ OotHighRefreshSwitch SwitchOotHighRefreshStalled(Kernel::KProcess& process, u64 
         !memory.ReadBlock(cave_address, current.cave.data(), current.cave.size())) {
         return OotHighRefreshSwitch::UnknownCode;
     }
-    const auto target = SwitchOotHighRefreshCode(current, on);
+    const auto disabled = Settings::values.disabled_addons.find(0x0400486024DEC000ULL);
+    const bool ripples = disabled == Settings::values.disabled_addons.end() ||
+                         std::ranges::find(disabled->second, std::string{WATER_RIPPLE_NAME}) ==
+                             disabled->second.end();
+    const auto target = SwitchOotHighRefreshCode(current, on, ripples);
     if (!target) {
         return OotHighRefreshSwitch::UnknownCode;
     }

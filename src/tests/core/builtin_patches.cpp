@@ -343,12 +343,11 @@ TEST_CASE("High refresh rate built-in calls its own routine only while its setti
         const auto patches = manager.GetPatches();
         return std::ranges::find(patches, name, &FileSys::Patch::name) != patches.end();
     };
-    // Dark's Dynamic FPS as before: his call and routine, our cave free, the water fcvtzs.
+    // Dark's Dynamic FPS: his call and routine, not the high refresh mode (the water ripple
+    // built-in may or may not be there next to it).
     const auto dark_only = [&](const std::vector<u8>& patched) {
         return word_at(patched, CallOffset) == DynamicCall &&
                word_at(patched, Dark + 0x74) == DarkThreshold &&
-               word_at(patched, Code + OcarinaWaterHook) != 0x14EFFE26 &&
-               word_at(patched, Routine) == 0 &&
                !FileSys::OotHighRefreshScaleOffset(std::span{patched}.subspan(Code));
     };
     struct RestoreSetting {
@@ -360,16 +359,36 @@ TEST_CASE("High refresh rate built-in calls its own routine only while its setti
     PatchManagerTestContext context;
     auto nso = MakeOcarinaMain();
 
-    SECTION("Off: Dark's routine as before, nothing past it, not listed") {
+    SECTION("Off: Dark's routine, with the water ripple built-in next to it, high refresh not listed") {
         Settings::values.oot_high_refresh.SetValue(false);
         const auto patched = context.Manager().PatchNSO(nso, "main");
         REQUIRE(dark_only(patched));
+        for (size_t offset = Dark + 0x78; offset < Routine; offset += 4) {
+            REQUIRE(word_at(patched, offset) == 0);
+        }
+        // v5.8: the ripple accumulator and its hook with Dark's mode too (zortos293/Lichii#1180).
+        REQUIRE(word_at(patched, Code + OcarinaWaterHook) == 0x14EFFE26); // b 0x3c46e90
+        REQUIRE(word_at(patched, Routine + 0x90) == 0xB00092C9);          // adrp x9, 0x4e9f000
+        REQUIRE(word_at(patched, Routine + 0x10C) == 0x171001BC);         // b 0x475fc
+        for (size_t offset = 0x110; offset < 0x200; offset += 4) {
+            REQUIRE(word_at(patched, Routine + offset) == 0);
+        }
+        REQUIRE_FALSE(listed(context.Manager(), HighRefresh));
+        REQUIRE(listed(context.Manager(), DynamicFps));
+        REQUIRE(listed(context.Manager(), "Water ripples at any frame rate (built-in)"));
+    }
+
+    SECTION("Off, with the water ripple built-in off in Add-Ons: Dark's routine alone, as before") {
+        Settings::values.oot_high_refresh.SetValue(false);
+        Settings::values.disabled_addons[OcarinaTitleId] = {
+            std::string{"Water ripples at any frame rate (built-in)"}};
+        const auto patched = context.Manager().PatchNSO(nso, "main");
+        Settings::values.disabled_addons.erase(OcarinaTitleId);
+        REQUIRE(dark_only(patched));
+        REQUIRE(word_at(patched, Code + OcarinaWaterHook) == WaterFcvtzs);
         for (size_t offset = Dark + 0x78; offset < Routine + 0x200; offset += 4) {
             REQUIRE(word_at(patched, offset) == 0);
         }
-        REQUIRE(word_at(patched, Code + OcarinaWaterHook) == WaterFcvtzs);
-        REQUIRE_FALSE(listed(context.Manager(), HighRefresh));
-        REQUIRE(listed(context.Manager(), DynamicFps));
     }
 
     SECTION("On: the call to the high refresh routine, with its speed scale word") {
@@ -425,7 +444,7 @@ TEST_CASE("High refresh rate built-in calls its own routine only while its setti
         REQUIRE_FALSE(FileSys::OotHighRefreshScaleOffset(std::span{patched}.subspan(Code)));
     }
 
-    SECTION("On, with another word at the water hook: Dark's routine") {
+    SECTION("On, with another word at the water hook: Dark's routine, no ripple built-in") {
         Settings::values.oot_high_refresh.SetValue(true);
         std::memcpy(nso.data() + Code + OcarinaWaterHook, &NopInstruction, sizeof(u32));
         const auto patched = context.Manager().PatchNSO(nso, "main");

@@ -163,9 +163,11 @@ enum class OotHighRefreshLayout {
 /// Which mode `code` holds (On whatever its speed scale word holds).
 [[nodiscard]] OotHighRefreshLayout GetOotHighRefreshLayout(const OotHighRefreshCode& code);
 /// `code` switched to the mode `on`: the bytes to write. `code` itself when it already is in that
-/// mode (its speed scale word kept), nullopt when it holds neither mode.
+/// mode (its speed scale word kept), nullopt when it holds neither mode. `ripples`: whether
+/// Dark's mode keeps the water hook and cave (the "Water ripples at any frame rate" built-in,
+/// on unless turned off in Add-Ons); without it switching off clears them as before v5.8.
 [[nodiscard]] std::optional<OotHighRefreshCode> SwitchOotHighRefreshCode(
-    const OotHighRefreshCode& code, bool on);
+    const OotHighRefreshCode& code, bool on, bool ripples = true);
 /// Whether the high refresh routine's state (Dark's timer state and the water ripple slots) lies
 /// in the module's BSS, [bss_start, bss_end) in module offsets.
 [[nodiscard]] bool OotHighRefreshStateInBss(u64 bss_start, u64 bss_end);
