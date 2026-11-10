@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <utility>
 
 #include "common/alignment.h"
@@ -232,13 +233,16 @@ void nvhost_as_gpu::Nx2Map(u64 gpu_address, u64 cpu_address, u64 size) {
     // nx2:gpu locks that the GPU thread takes under that lock (sparse blocks backed on write).
     // A reused range is checked there too, before the GMMU map, against the pages the CPU range
     // has now (Nx2RefreshBacking).
-    auto* const memory = fresh ? nullptr : &session->process->GetMemory();
+    auto process = fresh ? nullptr
+                         : std::make_shared<Kernel::KScopedAutoObject<Kernel::KProcess>>(
+                               system.Kernel(), session->process);
     system.GPU().MapInOrder(
         gpu_address, size,
-        [gmmu = gmmu.get(), &smmu = system.Host1x().MemoryManager(), memory,
+        [gmmu = gmmu.get(), &smmu = system.Host1x().MemoryManager(), process = std::move(process),
          asid = session->asid, gpu_address, cpu_address, device_address, size] {
-            if (memory != nullptr) {
-                Nx2RefreshBacking(smmu, *memory, asid, device_address, cpu_address, size);
+            if (process) {
+                Nx2RefreshBacking(smmu, process->GetPointerUnsafe()->GetMemory(), asid,
+                                  device_address, cpu_address, size);
             }
             gmmu->Map(gpu_address, device_address, size, Tegra::PTEKind::PITCH, false);
         });
