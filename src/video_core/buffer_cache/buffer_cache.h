@@ -2669,8 +2669,12 @@ void BufferCache<P>::BindHostComputeStorageBuffers() {
     // EDEN_NX2_GPU_PROFILE: bytes bound against bytes uploaded (the compute bindings line).
     const bool profile = Nx2Profile::Enabled();
     count_compute_sync = profile;
+    // EDEN_NX2_EXP59 & 4: the dirty-word walk for these synchronizes only; & 8 verifies it.
+    // Bits 1 and 2 belong to the read extents.
+    compute_dirty_walk = VideoCore::Nx2Debug::Experiment(59) & (4 | 8);
     SCOPE_EXIT {
         count_compute_sync = false;
+        compute_dirty_walk = 0;
     };
     ForEachEnabledBit(channel_state->enabled_compute_storage_buffers, [&](u32 index) {
         const Binding& binding = channel_state->compute_storage_buffers[index];
@@ -3821,8 +3825,25 @@ bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 si
                       device_addr, size);
         }
     }
+    // EDEN_NX2_EXP59 (compute storage binds only, compute_dirty_walk): & 4 walks the dirty words
+    // like CleanWords above; & 8 keeps the full walk and checks what & 4 would have left out.
+    const bool compute_verify = (compute_dirty_walk & 8) != 0;
+    const bool compute_fast = !compute_verify && (compute_dirty_walk & 4) != 0;
+    if (compute_verify) [[unlikely]] {
+        const bool walks = VerifyComputeDirtyWalk(device_addr, size);
+        if (count_compute_sync) {
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncDirtyWalks, 1);
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncDirtySkips, walks ? 0 : 1);
+        }
+    }
     const auto for_each_upload_range = [&](auto&& func) {
-        if (skip_clean) {
+        if (compute_fast) {
+            const bool walked = memory_tracker.ForEachDirtyUploadRange(device_addr, size, func);
+            if (count_compute_sync) {
+                Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncDirtyWalks, 1);
+                Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncDirtySkips, walked ? 0 : 1);
+            }
+        } else if (skip_clean && !compute_verify) {
             memory_tracker.ForEachDirtyUploadRange(device_addr, size, func);
         } else {
             memory_tracker.ForEachUploadRange(device_addr, size, func);
@@ -3899,6 +3920,53 @@ bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 si
         UploadMemory(buffer, total_size_bytes, largest_copy, copies_span);
         return false;
     }
+}
+
+template <class P>
+bool BufferCache<P>::VerifyComputeDirtyWalk(DAddr device_addr, u32 size) {
+    // The full walk runs after this and is what gets used. A CPU page outside the dirty-word
+    // window is an upload the dirty-word walk would have missed; an Untracked one is a page it
+    // would have left unprotected. Both must stay 0.
+    const auto check = memory_tracker.CheckDirtyWalk(device_addr, size);
+    auto& verify = dirty_walk_verify;
+    ++verify.checked;
+    ++verify.total_checked;
+    if (check.cpu_pages != 0 || check.untracked_pages != 0) [[unlikely]] {
+        ++verify.mismatches;
+        ++verify.total_mismatches;
+        verify.cpu_pages += check.cpu_pages;
+        verify.untracked_pages += check.untracked_pages;
+        if (verify.logged < 16) {
+            ++verify.logged;
+            LOG_ERROR(HW_GPU,
+                      "Nx2 EXP59 verify: the dirty-word walk would differ at {:#x}+{:#x}: {} CPU "
+                      "pages it would not upload, {} Untracked pages it would not re-track",
+                      device_addr, size, check.cpu_pages, check.untracked_pages);
+        }
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (verify.last_report == std::chrono::steady_clock::time_point{}) {
+        verify.last_report = now;
+    } else if (now - verify.last_report >= std::chrono::seconds{10}) {
+        if (verify.mismatches != 0) {
+            LOG_ERROR(HW_GPU,
+                      "Nx2 EXP59 verify, last 10 s: {} of {} compute synchronizes differ ({} CPU "
+                      "pages, {} Untracked pages); since start {} of {}",
+                      verify.mismatches, verify.checked, verify.cpu_pages, verify.untracked_pages,
+                      verify.total_mismatches, verify.total_checked);
+        } else {
+            LOG_INFO(HW_GPU,
+                     "Nx2 EXP59 verify, last 10 s: 0 of {} compute synchronizes differ; since "
+                     "start {} of {}",
+                     verify.checked, verify.total_mismatches, verify.total_checked);
+        }
+        verify.checked = 0;
+        verify.mismatches = 0;
+        verify.cpu_pages = 0;
+        verify.untracked_pages = 0;
+        verify.last_report = now;
+    }
+    return check.walks;
 }
 
 template <class P>

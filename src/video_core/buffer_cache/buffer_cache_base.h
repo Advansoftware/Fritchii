@@ -739,6 +739,10 @@ private:
 
     bool SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 size);
 
+    /// EDEN_NX2_EXP59 & 8: before the full walk, counts and logs what the dirty-word walk would
+    /// have left out. Returns whether the dirty-word walk would have walked anything.
+    bool VerifyComputeDirtyWalk(DAddr device_addr, u32 size);
+
     void UploadMemory(Buffer& buffer, u64 total_size_bytes, u64 largest_copy,
                       std::span<BufferCopy> copies);
 
@@ -1037,6 +1041,21 @@ private:
     /// EDEN_NX2_GPU_PROFILE: SynchronizeBuffer counts its uploads as compute storage uploads
     /// (set in BindHostComputeStorageBuffers).
     bool count_compute_sync = false;
+    /// EDEN_NX2_EXP59 bits 4 and 8 while BindHostComputeStorageBuffers runs (0 otherwise):
+    /// SynchronizeBuffer walks only the dirty tracker words (4), or walks all and checks (8).
+    int compute_dirty_walk = 0;
+    /// EXP59 & 8: synchronizes checked, and those where the dirty-word walk would have differed,
+    /// since the last totals line (VerifyComputeDirtyWalk).
+    struct DirtyWalkVerify {
+        u64 checked = 0;
+        u64 mismatches = 0;
+        u64 cpu_pages = 0;
+        u64 untracked_pages = 0;
+        u64 total_checked = 0;
+        u64 total_mismatches = 0;
+        u32 logged = 0;
+        std::chrono::steady_clock::time_point last_report{};
+    } dirty_walk_verify;
     u64 frame_tick = 0;
 
     /// EDEN_NX2_EXP18 (zortos293/Lichii#641): resolved bindings are kept while the GPU mappings
