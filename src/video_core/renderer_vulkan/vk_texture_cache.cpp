@@ -2964,7 +2964,11 @@ void TextureCacheRuntime::PoolImage(const ImagePoolKey& key, vk::Image image, u6
     });
     image_pool_bytes += bytes;
     ++image_pool_given;
-    TrimImagePool(ImagePoolMaxBytes);
+    TrimImagePool(ImagePoolCap());
+}
+
+u64 TextureCacheRuntime::ImagePoolCap() {
+    return VideoCore::Nx2Debug::Experiment(42) >= 2 ? ImagePoolMaxBytesDedicated : ImagePoolMaxBytes;
 }
 
 void TextureCacheRuntime::TrimImagePool(u64 max_bytes) {
