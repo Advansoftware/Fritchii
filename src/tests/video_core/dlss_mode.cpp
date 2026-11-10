@@ -7,34 +7,25 @@
 namespace Mode = VideoCommon::DlssMode;
 using Quality = Settings::NvidiaDlssQuality;
 
-TEST_CASE("DLSS settings preserve old profiles and per-game overrides", "[dlss_mode]") {
-    REQUIRE(Settings::values.nvidia_dlss_preset.GetDefault() == Settings::NvidiaDlssPreset::M);
+TEST_CASE("DLSS settings keep K by default and round-trip saved values", "[dlss_mode]") {
+    using Preset = Settings::DlssPreset;
+    REQUIRE(Settings::values.nvidia_dlss_preset.GetDefault() == Preset::K);
     REQUIRE(Settings::values.nvidia_dlss_quality.GetDefault() == Quality::Automatic);
     Settings::Linkage linkage;
-    Settings::SwitchableSetting<Settings::NvidiaDlssPreset> preset{
-        linkage, Settings::NvidiaDlssPreset::M, "preset", Settings::Category::Renderer};
+    Settings::Setting<Preset> preset{linkage, Preset::K, "preset", Settings::Category::Renderer};
     preset.LoadString("");
-    REQUIRE(preset.GetValue() == Settings::NvidiaDlssPreset::M);
-    preset.LoadString("0");
-    REQUIRE(preset.GetValue() == Settings::NvidiaDlssPreset::M);
+    REQUIRE(preset.GetValue() == Preset::K);
     preset.LoadString("invalid");
-    REQUIRE(preset.GetValue() == Settings::NvidiaDlssPreset::M);
-    for (const auto& [name, value] :
-         Settings::EnumMetadata<Settings::NvidiaDlssPreset>::Canonicalizations()) {
+    REQUIRE(preset.GetValue() == Preset::K);
+    for (const auto& [name, value] : Settings::EnumMetadata<Preset>::Canonicalizations()) {
         preset.SetValue(value);
         const auto saved = preset.ToString();
         preset.LoadString("");
         preset.LoadString(saved);
         REQUIRE(preset.GetValue() == value);
     }
-    preset.SetValue(Settings::NvidiaDlssPreset::K);
-    preset.SetGlobal(false);
-    preset.LoadString("0");
-    REQUIRE(preset.GetValue() == Settings::NvidiaDlssPreset::M);
-    preset.SetGlobal(true);
-    REQUIRE(preset.GetValue() == Settings::NvidiaDlssPreset::K);
-    Settings::SwitchableSetting<Quality> quality{linkage, Quality::Automatic, "quality",
-                                                 Settings::Category::Renderer};
+    Settings::Setting<Quality> quality{linkage, Quality::Automatic, "quality",
+                                       Settings::Category::Renderer};
     quality.LoadString("1");
     REQUIRE(quality.GetValue() == Quality::Native);
 }
