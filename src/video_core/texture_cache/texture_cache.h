@@ -452,6 +452,19 @@ void TextureCache<P>::ApplyThresholdOverrides(bool log) {
         (std::min)(expected_memory, critical_memory - (std::min)(critical_memory, u64{768_MiB}));
     minimum_memory =
         (std::min)(minimum_memory, expected_memory - (std::min)(expected_memory, u64{1_GiB}));
+    // EDEN_NX2_TC_CEILING_MIB: a ceiling for the critical threshold (expected 1.5 GiB under it),
+    // which only ever lowers them, so cards with a smaller budget keep theirs. Fritchii builds it
+    // in at 7680 (2026-11-10, owner's playtests: 16 GB card, VRAM 10 -> ~6 GB, 4-6 GB of RAM kept
+    // free instead of ~1.5 since Windows charges device memory to commit, 58.8 fps over 30 min).
+    if (const char* value = std::getenv("EDEN_NX2_TC_CEILING_MIB")) {
+        const u64 ceiling = std::strtoull(value, nullptr, 10) << 20;
+        if (ceiling >= 2_GiB) {
+            critical_memory = (std::min)(critical_memory, ceiling);
+            expected_memory = (std::min)(expected_memory, ceiling - 1536_MiB);
+            minimum_memory = (std::min)(minimum_memory,
+                                        expected_memory - (std::min)(expected_memory, u64{1_GiB}));
+        }
+    }
     // EDEN_NX2_TC_EXPECTED_MIB / EDEN_NX2_TC_CRITICAL_MIB override the collector's thresholds.
     for (const auto& [name, target] : {std::pair{"EDEN_NX2_TC_EXPECTED_MIB", &expected_memory},
                                        std::pair{"EDEN_NX2_TC_CRITICAL_MIB", &critical_memory}}) {

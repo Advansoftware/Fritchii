@@ -191,6 +191,14 @@ constexpr std::pair<const char*, const char*> BuiltinSwitches[] = {
     // No 40 MB/s pacing of game file reads (upstream's fix for video freezes in other games):
     // OoT's videos play fine without it and it slept the game at loads and kills (2026-11-10).
     {"EDEN_NX2_READ_THROTTLE", "0"},
+    // The texture cache collects from 7.5 GiB at most (a ceiling: smaller cards keep their own
+    // thresholds). Owner's call for v5.7 after the 2026-11-10 playtests (VRAM 10 -> ~6 GB, more
+    // RAM free, no new stutter).
+    {"EDEN_NX2_TC_CEILING_MIB", "7680"},
+    // Idle CPU cores compile ahead the game code another core compiled (each of OoT's 6 cores
+    // has its own recompiler). Owner's call for v5.7 after the 2026-11-10 playtests: Kakariko
+    // felt much better; repeat compiles after reloads 294 -> 8 ms in the night tests.
+    {"EDEN_NX2_JIT_WARM", "1"},
 };
 
 static void LoadNx2Switches(const char* argv0) {
