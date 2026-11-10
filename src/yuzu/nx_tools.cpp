@@ -335,13 +335,20 @@ struct NxTools::Job {
                        const std::filesystem::path& path) {
         const auto file = filesystem->OpenFile(ToUtf8(path), FileSys::OpenMode::Read);
         std::string error = "file not found";
-        auto decrypted = file != nullptr ? FileSys::OpenDecryptedPackage(file, error) : nullptr;
+        // An XCI goes in as a whole decrypted gamecard image, so nxformat keeps the firmware of
+        // its update partition. Other packages go in as a decrypted NSP.
+        std::string ignored;
+        auto decrypted = file != nullptr ? FileSys::OpenDecryptedGamecard(file, ignored) : nullptr;
+        const bool gamecard = decrypted != nullptr;
+        if (!gamecard && file != nullptr) {
+            decrypted = FileSys::OpenDecryptedPackage(file, error);
+        }
         if (decrypted == nullptr) {
             return QString::fromStdString(error);
         }
         auto& held =
             files.emplace_back(std::make_unique<FileSys::VirtualFile>(std::move(decrypted)));
-        const auto name = ToUtf8(path.stem()) + ".nsp";
+        const auto name = ToUtf8(path.stem()) + (gamecard ? ".xci" : ".nsp");
         auto* source =
             nxformat_source_new(name.c_str(), (*held)->GetSize(), &ReadSource, held.get());
         if (source == nullptr) {
