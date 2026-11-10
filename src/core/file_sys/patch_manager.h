@@ -130,19 +130,24 @@ private:
 [[nodiscard]] std::optional<size_t> OotHighRefreshScaleOffset(std::span<const u8> code);
 
 /// The parts of Ocarina of Time's main (offsets after its NSO header) that its high refresh rate
-/// mode changes. Off (Dark's Dynamic FPS, the default): Dark's 120-byte routine at the start of the
-/// cave, the rest of the cave zero, the water renderer's own fcvtzs. On: the high refresh routine
-/// (its speed scale word at +0x88), a zero word, the water ripple accumulator at +0x90, and a branch
-/// to it in place of that fcvtzs. Both have the frame step's call to the start of the cave.
+/// mode changes. Dark's 120-byte routine stays at main+0x3C46200 in both modes: other mods (the
+/// Hyrule Cheat Menu at main+0x3C46280..0x3C46398) put their code right after it, so ours lives in
+/// its own cave at the free end of that page. Off (Dark's Dynamic FPS, the default): the frame
+/// step's call to Dark's routine, the water renderer's own fcvtzs, our cave zero. On: the call to
+/// the high refresh routine at the start of our cave (its speed scale word at +0x88), a zero word,
+/// the water ripple accumulator at +0x90, and a branch to it in place of that fcvtzs.
 struct OotHighRefreshCode {
     static constexpr size_t CallOffset = 0x6E6CC4;
     static constexpr size_t WaterOffset = 0x475F8;
-    static constexpr size_t CaveOffset = 0x3C46200;
+    static constexpr size_t DarkOffset = 0x3C46200;
+    static constexpr size_t DarkSize = 120;
+    static constexpr size_t CaveOffset = 0x3C46E00;
     static constexpr size_t CaveSize = 0x110;
     static constexpr size_t ScaleOffset = CaveOffset + 0x88;
 
     std::array<u8, 4> call{};
     std::array<u8, 4> water{};
+    std::array<u8, DarkSize> dark{};
     std::array<u8, CaveSize> cave{};
 };
 

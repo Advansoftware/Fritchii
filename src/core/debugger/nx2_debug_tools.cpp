@@ -477,7 +477,8 @@ json SetSwitch(ToolState&, const json& params) {
 
 // Ocarina of Time's high refresh rate mode, switched live for tests without saving the setting
 // (the Ctrl+U hotkey saves it into the player's config). Also returns main's code address, for
-// read_memory of the patched cave (main + 0x3C46200) and the ripple hook (main + 0x475F8).
+// read_memory of Dark's routine (main + 0x3C46200), our cave (main + 0x3C46E00), the frame step's
+// call (main + 0x6E6CC4) and the ripple hook (main + 0x475F8).
 json OotHighRefresh(ToolState& state, const json& params) {
     Kernel::KProcess* const process = state.system.ApplicationProcess();
     json result = {{"patched", Settings::OotHighRefreshPatched()},
