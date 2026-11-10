@@ -4986,7 +4986,8 @@ bool PipelineCache::CheckKeptSample(const PrecompiledKept::Index& index,
     return false;
 }
 
-std::unique_ptr<GraphicsPipeline> PipelineCache::CreatePrecompiledGraphicsPipeline() {
+std::unique_ptr<GraphicsPipeline> PipelineCache::CreatePrecompiledGraphicsPipeline(
+    const VideoCommon::EvictedPointerSlots::Slots* keep_pointers) {
     const int mode = PrecompiledFastMode();
     if (mode == 0 || !kept_available.load(std::memory_order_acquire)) {
         return nullptr;
@@ -5013,6 +5014,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreatePrecompiledGraphicsPipeli
     }
     GraphicsEnvironments environments;
     GetGraphicsEnvironments(environments, graphics_key.unique_hashes);
+    KeepPointers(environments.envs, graphics_key, keep_pointers);
     const auto live = environments.Span();
     const auto stages_match = [&](const PrecompiledKept::Record& record) {
         size_t programs = 0;
@@ -5140,6 +5142,14 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreatePrecompiledGraphicsPipeli
         descriptor_pool, guest_descriptor_queue, descriptor_buffer_ring, &workers, nullptr,
         render_pass_cache, graphics_key, std::array<vk::ShaderModule, Maxwell::MaxShaderStage>{},
         info_ptrs, std::move(emit_stages), library_params);
+    // As a translation's (the live environments answered the same questions): kept if evicted.
+    VideoCommon::EvictedPointerSlots::Slots mapped_pointers;
+    for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
+        if (graphics_key.unique_hashes[index] != 0) {
+            mapped_pointers[index] = environments.envs[index].MappedStoragePointerKeys();
+        }
+    }
+    pipeline->SetMappedPointers(std::move(mapped_pointers));
     precompiled_pending.push_back(graphics_key);
     ++precompiled_stats.graphics;
     // The GPU thread's own time: the check and the creation, not the audit.
@@ -5277,7 +5287,15 @@ void PipelineCache::CheckPrecompiledBuilds() {
             dropped = true;
             return true;
         }
-        return pipeline->IsBuilt();
+        if (!pipeline->IsBuilt()) {
+            return false;
+        }
+        // Built: an evicted key's kept pointer slots are done with. A failed one keeps them for
+        // the translation that replaces it.
+        if (evicted_pointer_slots.Size() != 0) {
+            evicted_pointer_slots.Forget(key.Hash());
+        }
+        return true;
     });
     if (dropped) {
         for (auto& [key, pipeline] : graphics_cache) {
@@ -5552,28 +5570,51 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
     if (is_new) {
         ReportNewPipelineKey(graphics_key);
         pipeline = TakeBackgroundPipeline(graphics_key);
+        // A key evicted earlier (EvictUnusedPipelines) is translated binding the storage buffer
+        // pointers it bound, whatever their slots hold now: one null or unmapped around an area
+        // load would otherwise read zeros for the rest of the session (from zortos293/Lichii#1143).
+        // Kept until a pipeline of the key is made: a queued translation may be queued again.
+        const auto* const keep_pointers = pipeline ? nullptr : KeptPointers();
+        if (keep_pointers) {
+            for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
+                if (graphics_key.unique_hashes[index] != 0) {
+                    for (const u64 slot : (*keep_pointers)[index]) {
+                        WarnKeptPointer(index, slot);
+                    }
+                }
+            }
+        }
+        bool precompiled = false;
         if (!pipeline) {
             // EDEN_NX2_PRECOMPILED_FAST: a precompiled pipeline whose recorded answers hold is
             // created from its kept infos (no translation) and built from its kept SPIR-V on a
             // worker; its draws wait or are skipped by the usual rule (BuiltPipeline).
-            pipeline = CreatePrecompiledGraphicsPipeline();
+            pipeline = CreatePrecompiledGraphicsPipeline(keep_pointers);
+            precompiled = pipeline != nullptr;
         }
         if (!pipeline) {
             // EDEN_NX2_ASYNC_TRANSLATE=1/2: a draw that may be skipped has its new pipeline
             // translated on a translation thread, and is skipped (as for an unbuilt pipeline)
             // until it is ready. The entry stays empty meanwhile.
-            if (translate_queue && EnqueueTranslation()) {
+            if (translate_queue && EnqueueTranslation(keep_pointers)) {
                 NoteSkippedLookup();
                 ++translate_stats.skipped;
                 return nullptr;
             }
-            pipeline = CreateGraphicsPipeline();
+            pipeline = CreateGraphicsPipeline(keep_pointers);
+        }
+        // A precompiled one's are forgotten once it builds (CheckPrecompiledBuilds)
+        if (pipeline && !precompiled && evicted_pointer_slots.Size() != 0) {
+            evicted_pointer_slots.Forget(graphics_key.Hash());
         }
     } else if (!pipeline && translate_queue) {
         bool pending{};
         pipeline = AdoptTranslation(pending);
         if (pending) {
             return nullptr;
+        }
+        if (pipeline && evicted_pointer_slots.Size() != 0) {
+            evicted_pointer_slots.Forget(graphics_key.Hash());
         }
     }
     if (!pipeline) {
@@ -5871,6 +5912,7 @@ void PipelineCache::EvictUnusedPipelines() {
         if (used_this_session.erase(it->second.get()) != 0) {
             used_and_evicted.insert(it->first.Hash());
         }
+        evicted_pointer_slots.Remember(it->first.Hash(), it->second->MappedPointers());
         evicted_pipelines.emplace_back(tick, std::move(it->second));
         graphics_cache.erase(it);
     }
@@ -6631,13 +6673,25 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         .spirv_hashes = spirv_hashes,
         .libraries_only = libraries_only,
     };
-    return std::make_unique<GraphicsPipeline>(
+    // The slots each program bound as storage buffer pointers, kept if the pipeline is evicted
+    // (evicted_pointer_slots) for its next translation (from zortos293/Lichii#1143).
+    static_assert(VideoCommon::EvictedPointerSlots::NumPrograms == Maxwell::MaxShaderProgram);
+    VideoCommon::EvictedPointerSlots::Slots mapped_pointers;
+    for (size_t index = 0, program_env = 0;
+         index < Maxwell::MaxShaderProgram && program_env < envs.size(); ++index) {
+        if (key.unique_hashes[index] != 0) {
+            mapped_pointers[index] = envs[program_env++]->MappedStoragePointerKeys();
+        }
+    }
+    auto pipeline = std::make_unique<GraphicsPipeline>(
         scheduler, buffer_cache, texture_cache,
         libraries_only ? WarmPipelineCache() : PlayPipelineCache(),
         libraries_only || t_precompile_build ? nullptr : &shader_notify, device, descriptor_pool,
         guest_descriptor_queue, descriptor_buffer_ring, thread_worker, statistics,
         render_pass_cache, key, std::move(modules), infos, std::move(emit_stages),
         library_params, std::move(mesh_emulation));
+    pipeline->SetMappedPointers(std::move(mapped_pointers));
+    return pipeline;
 
 } catch (const Shader::Exception& exception) {
     auto hash = key.Hash();
@@ -6784,7 +6838,66 @@ void NoteSnapshotCheck(const GraphicsPipelineCacheKey& key, size_t bytes,
 }
 } // Anonymous namespace
 
-std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
+const VideoCommon::EvictedPointerSlots::Slots* PipelineCache::KeptPointers() const {
+    if (evicted_pointer_slots.Size() == 0) {
+        return nullptr;
+    }
+    return evicted_pointer_slots.Find(graphics_key.Hash());
+}
+
+void PipelineCache::KeepPointers(std::span<GraphicsEnvironment> envs,
+                                 const GraphicsPipelineCacheKey& key,
+                                 const VideoCommon::EvictedPointerSlots::Slots* keep_pointers) {
+    if (!keep_pointers) {
+        return;
+    }
+    for (size_t index = 0; index < Maxwell::MaxShaderProgram && index < envs.size(); ++index) {
+        if (key.unique_hashes[index] != 0) {
+            envs[index].KeepStoragePointers((*keep_pointers)[index]);
+        }
+    }
+}
+
+void PipelineCache::WarnKeptPointer(size_t program, u64 slot) const {
+    if ((slot >> 63) != 0) {
+        // A pointer-table entry: its holder slot is warned about on its own
+        return;
+    }
+    const u32 index = static_cast<u32>(slot >> 32);
+    const u32 offset = static_cast<u32>(slot);
+    const size_t stage = program == 0 ? 0 : program - 1;
+    const auto& cbufs = maxwell3d->state.shader_stages[stage].const_buffers;
+    GPUVAddr value = 0;
+    const char* reason = nullptr;
+    if (index >= cbufs.size() || !cbufs[index].enabled ||
+        u64{offset} + sizeof(u64) > cbufs[index].size ||
+        !gpu_memory->IsFullyMappedRange(cbufs[index].address + offset, sizeof(u64))) {
+        reason = "constant buffer not bound";
+    } else {
+        value = gpu_memory->Read<u64>(cbufs[index].address + offset);
+        if (value == 0) {
+            reason = "null";
+        } else if (!gpu_memory->IsWithinGPUAddressRange(value)) {
+            reason = "outside the GPU address range";
+        } else if (!gpu_memory->IsFullyMappedRange(value, 1)) {
+            reason = "unmapped";
+        }
+    }
+    if (!reason) {
+        return;
+    }
+    static std::atomic<u64> kept{};
+    const u64 count = kept.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (count <= 32 || count % 1000 == 0) {
+        LOG_WARNING(Render_Vulkan,
+                    "Graphics pipeline {:016x} translated again after eviction: s{}:c{}[{:#x}] "
+                    "holds {:#x} ({}), kept as the storage buffer pointer it was ({} so far)",
+                    graphics_key.Hash(), program, index, offset, value, reason, count);
+    }
+}
+
+std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+    const VideoCommon::EvictedPointerSlots::Slots* keep_pointers) {
     const auto begin = std::chrono::steady_clock::now();
     t_runtime_build = true;
     t_build_split = {};
@@ -6796,6 +6909,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
     const bool snapshot_check = VideoCommon::AsyncTranslateMode() == 3;
     const size_t snapshot_bytes =
         GetGraphicsEnvironments(environments, graphics_key.unique_hashes, snapshot_check);
+    KeepPointers(environments.envs, graphics_key, keep_pointers);
     t_build_split.environments = std::chrono::steady_clock::now() - begin;
     SCOPE_EXIT {
         // Right after the translation (the SPIR-V and the driver compile may still be queued),
@@ -6906,7 +7020,8 @@ std::string CompareTranslations(const TranslationJob& job) {
 }
 } // Anonymous namespace
 
-bool PipelineCache::EnqueueTranslation() {
+bool PipelineCache::EnqueueTranslation(
+    const VideoCommon::EvictedPointerSlots::Slots* keep_pointers) {
     if (!DrawMayBeSkipped() || translate_sync_only.contains(graphics_key)) {
         return false;
     }
@@ -6922,6 +7037,7 @@ bool PipelineCache::EnqueueTranslation() {
     GraphicsEnvironments environments;
     translate_stats.snapshot_bytes +=
         GetGraphicsEnvironments(environments, graphics_key.unique_hashes, true);
+    KeepPointers(environments.envs, graphics_key, keep_pointers);
     // A copy (environments declare a destructor, so they have no moves); the snapshot is shared.
     job->envs = environments.envs;
     if (VideoCommon::AsyncTranslateMode() == 2) {
@@ -6929,6 +7045,7 @@ bool PipelineCache::EnqueueTranslation() {
         // would have, for the translation thread to compare with its own (SPIR-V and reads).
         GraphicsEnvironments live;
         GetGraphicsEnvironments(live, graphics_key.unique_hashes);
+        KeepPointers(live.envs, graphics_key, keep_pointers);
         job->reference = std::make_unique<TranslationRecord>();
         job->reference->translate_only = true;
         // Pools of its own: nothing else on the GPU thread holds IR in them.
@@ -6979,7 +7096,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::AdoptTranslation(bool& pending)
         if (!job) {
             translate_queue->Abandon(graphics_key);
             ++translate_stats.fallbacks;
-            return CreateGraphicsPipeline();
+            return CreateGraphicsPipeline(KeptPointers());
         }
     }
     bool retry{};
@@ -6987,9 +7104,10 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::AdoptTranslation(bool& pending)
     if (!retry) {
         return pipeline;
     }
-    // Not usable: translate again from a fresh snapshot of this draw, or build it here.
+    // Not usable: translate again from a fresh snapshot of this draw, or build it here (an
+    // evicted key's kept pointer slots stay kept until its pipeline is made).
     if (!translate_sync_only.contains(graphics_key) && DrawMayBeSkipped() &&
-        EnqueueTranslation()) {
+        EnqueueTranslation(KeptPointers())) {
         ++translate_stats.requeued;
         NoteSkippedLookup();
         ++translate_stats.skipped;
@@ -6997,7 +7115,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::AdoptTranslation(bool& pending)
         return nullptr;
     }
     ++translate_stats.fallbacks;
-    return CreateGraphicsPipeline();
+    return CreateGraphicsPipeline(KeptPointers());
 }
 
 std::unique_ptr<GraphicsPipeline> PipelineCache::AdoptJob(std::unique_ptr<TranslationJob> job,
@@ -7126,6 +7244,9 @@ void PipelineCache::TickTranslations() {
         if (auto pipeline = AdoptJob(std::move(job), retry)) {
             it->second = std::move(pipeline);
             ++translate_stats.adopted_between_frames;
+            if (evicted_pointer_slots.Size() != 0) {
+                evicted_pointer_slots.Forget(it->first.Hash());
+            }
         } else if (retry) {
             // Not usable, and no draw to take a fresh snapshot from: the next lookup of the key
             // is a new one (queued again, or built on the GPU thread once it failed too often).

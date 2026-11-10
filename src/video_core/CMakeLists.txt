@@ -300,6 +300,7 @@ add_library(video_core STATIC
     shader_cache.h
     shader_environment.cpp
     shader_environment.h
+    evicted_pointer_slots.h
     shader_handle_program.h
     shader_notify.cpp
     shader_notify.h
