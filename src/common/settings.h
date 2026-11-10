@@ -1068,7 +1068,8 @@ constexpr u32 MAX_FRAME_GEN_MULTIPLIER = 4;
 /// real time then, so "Unlocked" only lifts the frame rate cap.
 [[nodiscard]] bool SpeedLimitEnabled();
 /// Set by the loader when it loads Ocarina of Time's main: whether the "High refresh rate
-/// (built-in)" patch was applied to it (Settings oot_high_refresh).
+/// (built-in)" patch was applied to it (Settings oot_high_refresh). Switching the mode while the
+/// game runs (Ctrl+U, FileSys::SwitchOotHighRefreshLive) sets it too.
 void SetOotHighRefreshPatched(bool patched);
 [[nodiscard]] bool OotHighRefreshPatched();
 

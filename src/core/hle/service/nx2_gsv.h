@@ -1946,6 +1946,7 @@ private:
     Nx2PresentPacer m_present_pacer;
     u32 m_swap_word{};
     u32 m_oot_scale_bits{}; // the speed scale last written (SetOotSpeedScale), 0 = none yet
+    bool m_oot_vsync_set{}; // the vsync event follows Ocarina's high refresh rate mode
 
     struct FrameTrace {
         Common::DkbFrameTrace::RateLimit rate;
@@ -1958,20 +1959,19 @@ private:
     } m_frame_trace;
 
     /// Ocarina of Time's high refresh rate routine: its speed scale word follows the speed limit
-    /// (Turbo, Slow, the Standard percentage; 1.0 when unlocked). Written only when it changes.
-    void SetOotSpeedScale(Kernel::KProcess& process, u64 address) {
+    /// (Turbo, Slow, the Standard percentage; 1.0 when unlocked). Written when the word in memory
+    /// differs: switching the mode live (Ctrl+U) writes the routine again with 1.0.
+    void SetOotSpeedScale(Kernel::KProcess& process) {
         const u16 limit = Settings::SpeedLimit();
         const float scale = Settings::values.use_speed_limit.GetValue() && limit != 0
                                 ? static_cast<float>(limit) / 100.0f
                                 : 1.0f;
         u32 bits;
         std::memcpy(&bits, &scale, sizeof(bits));
-        if (bits == m_oot_scale_bits) {
-            return;
+        if (process.UpdateOotHighRefreshScale(bits) &&
+            bits != std::exchange(m_oot_scale_bits, bits)) {
+            LOG_INFO(Service, "Ocarina of Time high refresh rate: speed scale {:.2f}", scale);
         }
-        m_oot_scale_bits = bits;
-        process.GetMemory().Write32(address, bits);
-        LOG_INFO(Service, "Ocarina of Time high refresh rate: speed scale {:.2f}", scale);
     }
 
     /// Ocarina of Time's frame period with the high refresh rate patch: the chosen cap, never
@@ -2063,12 +2063,16 @@ private:
                                           : 0;
         const bool high_refresh = oot_scale_address != 0 && !Settings::values.oot_30fps.GetValue();
         if (oot_scale_address != 0) {
-            SetOotSpeedScale(*process, oot_scale_address);
+            SetOotSpeedScale(*process);
             // The game starts its frames on the vsync event: at the cap, unlocked at 240 Hz.
             SetVsyncInterval(!high_refresh ? DefaultVblankInterval()
                              : Settings::SpeedLimitEnabled() ? OotHighRefreshInterval()
                                                              : std::chrono::nanoseconds{
                                                                    1'000'000'000LL / 240});
+            m_oot_vsync_set = true;
+        } else if (std::exchange(m_oot_vsync_set, false)) {
+            // Switched off while the game runs (Ctrl+U): the vsync event back at its default.
+            SetVsyncInterval(DefaultVblankInterval());
         }
         if (!Settings::SpeedLimitEnabled() || Settings::SpeedLimit() == 0) {
             VideoCommon::Nx2Perf::g_guest_frame_interval_ns.store(0, std::memory_order_relaxed);
