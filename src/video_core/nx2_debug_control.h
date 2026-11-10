@@ -415,6 +415,12 @@ inline void LoadExperiments() {
         // Castle Town live toggle 41.3 -> 43.8 fps, clear zone 54.7 -> 36.3 ms/s; screenshots
         // off/on identical.
         g_experiments[56].store(1, std::memory_order_relaxed);
+        // EXP58 = 1 (2026-11-10): guarded render targets that a newer target of another shape
+        // superseded are deleted once 60 frames old (TextureCache::SweepColdImages). Castle Town
+        // 150 s A/B: device memory 7.8-10.5 -> 5.2-5.7 GB, collector evictions 83-1915 a window
+        // -> 0, worst frames 140-180 -> 30-48 ms, moving median 42.2 -> 46.9 fps; skeleton fight
+        // 5.1-5.5 GB instead of 10.9 with 0 evictions; two owner playtests without glitches.
+        g_experiments[58].store(1, std::memory_order_relaxed);
         // EXP39 = 3: publish to a back that waits after 8 words, no snapshot refresh of entries
         // that ran (zortos293/Lichii#805 62db242b34; see the EXP39 notes above). Timing only.
         g_experiments[39].store(3, std::memory_order_relaxed);
