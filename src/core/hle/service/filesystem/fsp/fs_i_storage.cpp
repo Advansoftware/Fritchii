@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "core/file_sys/errors.h"
+#include "common/nx2_hitch.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/fsp/fs_i_storage.h"
 
@@ -37,6 +38,9 @@ Result IStorage::Read(
 
     const auto now = std::chrono::steady_clock::now();
     if (now < next_read_tick) {
+        // Hitch attribution: sleep_for rounds up to whole ms (1 ms takes ~1.5 ms), on the one FS
+        // thread (fable52_answer_11).
+        const Common::Nx2Hitch::Scope timed{Common::Nx2Hitch::Cause::FileThrottle};
         std::this_thread::sleep_for(next_read_tick - now);
     }
     next_read_tick = std::chrono::steady_clock::now() +
@@ -44,7 +48,10 @@ Result IStorage::Read(
                                               1'000'000'000 / ReadBytesPerSecond};
 
     // Read the data from the Storage backend
-    backend->Read(out_bytes.data(), length, offset);
+    {
+        const Common::Nx2Hitch::Scope timed{Common::Nx2Hitch::Cause::FileRead};
+        backend->Read(out_bytes.data(), length, offset);
+    }
 
     R_SUCCEED();
 }

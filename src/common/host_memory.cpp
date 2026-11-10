@@ -64,6 +64,7 @@
 #include <vector>
 
 #include "common/alignment.h"
+#include "common/nx2_hitch.h"
 #include "common/assert.h"
 #include "common/div_ceil.h"
 #include "common/free_region_manager.h"
@@ -324,6 +325,7 @@ public:
     }
 
     void Map(size_t virtual_offset, size_t host_offset, size_t length, MemoryPermission perms) {
+        const Common::Nx2Hitch::Scope timed{Common::Nx2Hitch::Cause::HostMemory}; // before the lock
         std::unique_lock lock{placeholder_mutex};
         if (!IsNiechePlaceholder(virtual_offset, length)) {
             Split(virtual_offset, length);
@@ -335,6 +337,7 @@ public:
     }
 
     void Unmap(size_t virtual_offset, size_t length) {
+        const Common::Nx2Hitch::Scope timed{Common::Nx2Hitch::Cause::HostMemory}; // before the lock
         std::scoped_lock lock{placeholder_mutex};
 
         // Unmap until there are no more placeholders
@@ -355,6 +358,7 @@ public:
         }
         const size_t virtual_end = virtual_offset + length;
 
+        const Common::Nx2Hitch::Scope timed{Common::Nx2Hitch::Cause::HostMemory}; // before the lock
         std::scoped_lock lock{placeholder_mutex};
         auto [it, end] = placeholders.equal_range({virtual_offset, virtual_end});
         while (it != end) {
