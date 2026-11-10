@@ -14,7 +14,7 @@ namespace {
 // there too: this size check fails the build until it is (update the size with it).
 // Bump Magic in vk_precompiled_kept.cpp when this layout changes.
 #if defined(_MSC_VER) && defined(_WIN64)
-static_assert(sizeof(Info) == 6936,
+static_assert(sizeof(Info) == 6960,
               "Shader::Info changed: list the new fields in VisitInfo, then update this size");
 // The descriptors are held in vectors, so a field they grow does not change sizeof(Info).
 static_assert(sizeof(ConstantBufferDescriptor) == 8 && sizeof(StorageBufferDescriptor) == 80 &&
@@ -253,6 +253,8 @@ void VisitAnyDescriptor(Io& io, D& d) {
         VisitConstantBuffer(io, d);
     } else if constexpr (std::is_same_v<T, StorageBufferDescriptor>) {
         VisitStorageBuffer(io, d);
+    } else if constexpr (std::is_same_v<T, StorageWriteExtent>) {
+        VisitWriteExtent(io, d);
     } else if constexpr (std::is_same_v<T, TextureBufferDescriptor>) {
         VisitTextureBuffer(io, d);
     } else if constexpr (std::is_same_v<T, ImageBufferDescriptor>) {
@@ -359,6 +361,7 @@ void VisitInfo(Io& io, I& info) {
     io(info.used_clip_distances);
     io(info.constant_buffer_descriptors);
     io(info.storage_buffers_descriptors);
+    io(info.storage_read_extents);
     io(info.texture_buffer_descriptors);
     io(info.image_buffer_descriptors);
     io(info.texture_descriptors);

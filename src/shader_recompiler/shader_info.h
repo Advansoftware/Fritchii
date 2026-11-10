@@ -387,6 +387,9 @@ struct Info {
     boost::container::static_vector<ConstantBufferDescriptor, MAX_CBUFS>
         constant_buffer_descriptors;
     boost::container::static_vector<StorageBufferDescriptor, MAX_SSBOS> storage_buffers_descriptors;
+    /// One per storage_buffers_descriptors entry, same order: how far the program's loads and
+    /// atomics reach past the pointer. A size other than the descriptors' means unknown.
+    std::vector<StorageWriteExtent> storage_read_extents;
     TextureBufferDescriptors texture_buffer_descriptors;
     ImageBufferDescriptors image_buffer_descriptors;
     TextureDescriptors texture_descriptors;
