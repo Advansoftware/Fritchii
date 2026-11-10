@@ -6,6 +6,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -190,6 +191,11 @@ size_t TakeWarmKeys(u32 core, std::vector<u64>& out, size_t max) {
 }
 
 void RegisterThread(const char* name) {
+    const std::string_view view{name};
+    t_role = view.starts_with("CPUCore") ? Role::GuestCore
+             : view == "GPUBack"         ? Role::GpuBack
+             : view == "GPU"             ? Role::GpuFront
+                                         : Role::Other;
 #ifdef _WIN32
     std::scoped_lock lock{g_thread_mutex};
     const size_t index = g_thread_count.load(std::memory_order_relaxed);

@@ -991,6 +991,40 @@ void TextureCache<P>::SweepColdImages() {
                  cold_kept_guarded, cold_kept_read, cold_watch.size(), slot_images.size(),
                  total_used_memory >> 20, expected_memory >> 20);
         cold_deleted = cold_kept_guarded = cold_kept_read = cold_superseded = 0;
+        // The image families made in those frames, most made first (fable52_answer_13 sec. 6).
+        std::vector<std::pair<std::pair<u32, u32>, const MadeShapes*>> families;
+        u64 made_total = 0;
+        for (const auto& [key, shapes] : made_shapes) {
+            families.emplace_back(key, &shapes);
+            made_total += shapes.made;
+        }
+        if (made_total != 0) {
+            std::ranges::sort(families, [](const auto& a, const auto& b) {
+                return a.second->made > b.second->made;
+            });
+            std::string text;
+            for (size_t i = 0; i < (std::min)(families.size(), size_t{6}); ++i) {
+                const auto& [key, shapes] = families[i];
+                const auto [low, high] = std::ranges::minmax(shapes->heights);
+                text += fmt::format("{}format {} width {}: {} made, {} heights {}-{}",
+                                    i == 0 ? "" : "; ", key.first, key.second, shapes->made,
+                                    shapes->heights.size(), low, high);
+            }
+            LOG_INFO(HW_GPU, "Images made in the last 600 frames: {} in {} (format, width) "
+                             "families; most made: {}",
+                     made_total, families.size(), text);
+        }
+        made_shapes.clear();
+    }
+}
+
+template <class P>
+void TextureCache<P>::NoteMadeShape(const ImageInfo& info) {
+    auto& shapes = made_shapes[{static_cast<u32>(info.format), info.size.width}];
+    ++shapes.made;
+    if (shapes.heights.size() < 64 &&
+        std::ranges::find(shapes.heights, info.size.height) == shapes.heights.end()) {
+        shapes.heights.push_back(info.size.height);
     }
 }
 
@@ -3846,6 +3880,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     const auto create_start = std::chrono::steady_clock::now();
     const ImageId new_image_id = slot_images.insert(runtime, new_info, gpu_addr, cpu_addr);
     rt_stats.create_ns += NsSince(create_start);
+    NoteMadeShape(new_info);
     if constexpr (requires(const Image& image) { image.FromPool(); }) {
         rt_stats.pooled_images += slot_images[new_image_id].FromPool() ? 1 : 0;
         Churn::Add(Churn::ImagesPooled, slot_images[new_image_id].FromPool() ? 1 : 0);

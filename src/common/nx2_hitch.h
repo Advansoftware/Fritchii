@@ -105,6 +105,25 @@ inline void ZeroTrimEnd() {
 /// Set on a CPU core's thread while it warm-compiles (PhysicalCore::Idle).
 inline thread_local bool t_warming{};
 
+/// Which emulator thread this is, from its name (RegisterThread), for the lock wait counters.
+enum class Role : u8 { Other, GuestCore, GpuFront, GpuBack, Count };
+inline thread_local Role t_role{};
+
+/// Time spent waiting for a contended SpinRecursiveMutex (the buffer and texture cache locks),
+/// per role (fable52_answer_13 section 3: the back's lock waits and the guest's 144 ms/s in
+/// GetFlushAreaLocked that nothing showed). Logged with the drain sites line (GpuSplit).
+struct LockWaits {
+    std::array<std::atomic<u64>, static_cast<size_t>(Role::Count)> ns{};
+    std::array<std::atomic<u64>, static_cast<size_t>(Role::Count)> count{};
+};
+inline LockWaits g_lock_waits;
+
+inline void AddLockWait(u64 ns) {
+    const auto i = static_cast<size_t>(t_role);
+    g_lock_waits.ns[i].fetch_add(ns, std::memory_order_relaxed);
+    g_lock_waits.count[i].fetch_add(1, std::memory_order_relaxed);
+}
+
 /// From a CPU core's recompiler before it compiles block `key` (its LocationDescriptor value):
 /// the cause to time it as (new code, code another core compiled, a warm compile). Process-wide
 /// key -> core mask, never forgets. With EDEN_NX2_JIT_WARM=1, an on-demand compile also queues
