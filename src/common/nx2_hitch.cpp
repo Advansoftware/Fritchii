@@ -219,13 +219,14 @@ void OnPresent(long long gap_us) {
     }
     const Snapshot now = Take();
     if (gap_us >= ThresholdUs) {
-        // At most 20 lines a minute (a loading screen can stall many presents in a row).
+        // At most 60 lines a minute (a loading screen can stall many presents in a row; 20 hid a
+        // 740 ms first load behind the title screen's gaps, 2026-11-10).
         const u64 now_ns = NowNs();
         if (now_ns - window_start_ns >= 60'000'000'000ULL) {
             window_start_ns = now_ns;
             lines_in_window = 0;
         }
-        if (lines_in_window++ < 20) {
+        if (lines_in_window++ < 60) {
             std::string causes;
             for (size_t i = 0; i < Causes; ++i) {
                 const u64 ns = now.ns[i] - last.ns[i];
