@@ -459,6 +459,13 @@ bool IsBuiltinDynamicFpsMod(u64 title_id, const VirtualDir& mod) {
     if (it == BUILTIN_PATCHES.end() || it->title_id != title_id || mod == nullptr) {
         return false;
     }
+    // A player who turned the built-in off in Add-Ons keeps their mod (as before), or they would
+    // get no Dynamic FPS at all.
+    if (const auto disabled = Settings::values.disabled_addons.find(title_id);
+        disabled != Settings::values.disabled_addons.end() &&
+        std::ranges::find(disabled->second, std::string{DYNAMIC_FPS_NAME}) != disabled->second.end()) {
+        return false;
+    }
     const auto overlaps = [&](const std::pair<u64, u64>& range) {
         return std::ranges::any_of(it->records, [&](const BuiltinPatchRecord& record) {
             const u64 begin = sizeof(Loader::NSOHeader) + record.module_offset;
