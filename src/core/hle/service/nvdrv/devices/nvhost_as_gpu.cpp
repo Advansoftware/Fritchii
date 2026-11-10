@@ -37,16 +37,6 @@ namespace Service::Nvidia::Devices {
 
 namespace {
 
-// EDEN_NX2_STALE_MAP_FIX=0 only reports stale device ranges (Nx2RefreshBacking) and leaves them
-// pointing at the old pages, as before.
-bool Nx2StaleMapFix() {
-    static const bool enabled = [] {
-        const char* value = std::getenv("EDEN_NX2_STALE_MAP_FIX");
-        return value == nullptr || value[0] != '0';
-    }();
-    return enabled;
-}
-
 // A device (SMMU) range keeps the host pages that backed its CPU range when it was mapped. The
 // ranges are reused by CPU address and size: when nx2:gpu 102 destroyed the memory, the game
 // can unmap it and map new pages at the same address, register it again, and get the old device
@@ -77,18 +67,13 @@ void Nx2RefreshBacking(Tegra::MaxwellDeviceMemoryManager& smmu, Core::Memory::Me
     if (stale_pages == 0) {
         return;
     }
-    const bool fix = Nx2StaleMapFix();
     static std::atomic<u32> reports{};
     if (reports.fetch_add(1, std::memory_order_relaxed) < 256) {
         LOG_WARNING(Service_NVDRV,
                     "Switch 2 device range {:#x} of CPU {:#x}+{:#x}: {} of {} pages point at old "
-                    "memory (first at +{:#x}){}",
+                    "memory (first at +{:#x}), mapped again",
                     device_address, cpu_address, size, stale_pages,
-                    (size + PageSize - 1) / PageSize, first_stale,
-                    fix ? ", mapped again" : ", left as is (EDEN_NX2_STALE_MAP_FIX=0)");
-    }
-    if (!fix) {
-        return;
+                    (size + PageSize - 1) / PageSize, first_stale);
     }
     // Unmapping drops the old pages from the reverse map and invalidates the caches over the range.
     smmu.Unmap(device_address, size);
