@@ -3400,7 +3400,8 @@ bool RasterizerVulkan::FrameDumpBuffers(bool compute, std::span<const u64> shade
         // EDEN_NX2_FRAME_DUMP_HOST: the host copy of guest-sourced ranges read from the buffer
         // cache (storage, and uniforms too large for the stream path), to find stale uploads.
         static const bool host_too = std::getenv("EDEN_NX2_FRAME_DUMP_HOST") != nullptr;
-        buffer.also_host = host_too && host && !gpu_modified && (storage || bound_size > 4096);
+        buffer.also_host = (host_too || frame_dump.HostCopies()) && host && !gpu_modified &&
+                           (storage || bound_size > 4096);
     });
     return frame_dump.NoteBuffers(compute, shader_hashes, buffers);
 }
@@ -3439,10 +3440,13 @@ void RasterizerVulkan::TickFrame() {
     }
     if (VideoCore::Nx2Debug::HasRequests()) {
         if (auto capture = VideoCore::Nx2Debug::TakeCapture()) {
-            // This build keeps the EDEN_NX2_FRAME_DUMP capture (file or time trigger) only.
-            VideoCore::Nx2Debug::FinishCapture(
-                capture->id, {.error = "capture_frame is not available in this build; use "
-                                       "EDEN_NX2_FRAME_DUMP"});
+            // Mid-game through the frame dump (no boot switch needed); "buffers" records every
+            // draw's bound buffers with their host copies, to tell stale data from a wrong read.
+            if (!frame_dump.RequestNow(capture->id, capture->directory, capture->buffers,
+                                       capture->buffers)) {
+                VideoCore::Nx2Debug::FinishCapture(
+                    capture->id, {.error = "a frame dump capture is already running"});
+            }
         }
         if (const auto change = VideoCore::Nx2Debug::TakeRejectChange()) {
             pipeline_cache.RefreshDebugRejections(change->unrejected);
