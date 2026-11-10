@@ -1699,7 +1699,8 @@ OotHighRefreshSwitch SwitchOotHighRefreshStalled(Kernel::KProcess& process, u64 
 OotHighRefreshSwitch SwitchOotHighRefreshLive(Core::System& system, bool on) {
     constexpr u64 OcarinaOfTime = 0x0400486024DEC000ULL;
     Kernel::KProcess* const process = system.ApplicationProcess();
-    if (!system.IsPoweredOn() || process == nullptr || process->GetProgramId() != OcarinaOfTime ||
+    if (!system.IsPoweredOn() || system.IsShuttingDown() || process == nullptr ||
+        process->GetProgramId() != OcarinaOfTime ||
         process->GetOotMainCodeAddress() == 0) {
         return OotHighRefreshSwitch::NotRunning;
     }

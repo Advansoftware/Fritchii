@@ -5318,7 +5318,8 @@ void MainWindow::OnToggleOotFrameRate() {
 
 bool MainWindow::IsOotRunning() const {
     constexpr u64 OcarinaOfTime = 0x0400486024DEC000ULL;
-    return emulation_running &&
+    // Not while "Closing software...": the kernel is being torn down (fable52_answer_10 2.6).
+    return emulation_running && !QtCommon::system->IsShuttingDown() &&
            QtCommon::system->GetApplicationProcessProgramID() == OcarinaOfTime;
 }
 
