@@ -281,7 +281,16 @@ TEST_CASE("High refresh rate built-in replaces Dark's routine only while its set
 
     PatchManagerTestContext context;
     auto nso = MakeMain(OcarinaBuildId, NopInstruction);
-    nso.resize(Routine + 0x100);
+    nso.resize(Routine + 0x200);
+    // The water renderer's fcvtzs (the ripple hook's original), and a BSS that holds the state.
+    constexpr u32 WaterFcvtzs = 0x1E380009;
+    std::memcpy(nso.data() + Code + 0x475F8, &WaterFcvtzs, sizeof(WaterFcvtzs));
+    Loader::NSOHeader header;
+    std::memcpy(&header, nso.data(), sizeof(header));
+    header.segments[2].location = 0x4000000;
+    header.segments[2].size = 0x100000;
+    header.segments[2].bss_size = 0x1000000;
+    std::memcpy(nso.data(), &header, sizeof(header));
 
     SECTION("Off: Dark's routine as before, nothing past it, not listed") {
         Settings::values.oot_high_refresh.SetValue(false);

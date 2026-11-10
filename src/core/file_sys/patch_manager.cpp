@@ -72,6 +72,9 @@ struct BuiltinPatch {
     bool (*setting_enabled)() = nullptr;
     /// Another built-in this one contains: skipped once this one is applied.
     std::string_view replaces{};
+    /// When set, guest state the patch keeps in the module (offset, size): it must lie in BSS.
+    size_t state_offset = 0;
+    size_t state_size = 0;
 };
 
 // Ocarina of Time takes its "dynamic resolution disabled" path, so the 3D renders at full scale
@@ -133,26 +136,70 @@ constexpr std::array<u8, 140> HIGH_REFRESH_ROUTINE{
 };
 constexpr size_t HIGH_REFRESH_ROUTINE_OFFSET = 0x3C46200;
 constexpr size_t HIGH_REFRESH_SCALE = 0x88; // the speed scale word, in the routine
-// The routine runs 20 bytes past Dark's 120: those words must be free (zero) in the module.
-constexpr std::span<const u8> HighRefreshWord(size_t offset) {
-    return std::span<const u8>{HIGH_REFRESH_ROUTINE}.subspan(offset, 4);
-}
-constexpr std::array HIGH_REFRESH_RECORDS{
-    BuiltinPatchRecord{.module_offset = 0x6E6CC4, .bytes = DYNAMIC_FPS_CALL},
-    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET,
-                       .bytes = std::span<const u8>{HIGH_REFRESH_ROUTINE}.first(120)},
-    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + 0x78,
-                       .bytes = HighRefreshWord(0x78), .checked = true, .original = 0},
-    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + 0x7C,
-                       .bytes = HighRefreshWord(0x7C), .checked = true, .original = 0},
-    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + 0x80,
-                       .bytes = HighRefreshWord(0x80), .checked = true, .original = 0},
-    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + 0x84,
-                       .bytes = HighRefreshWord(0x84), .checked = true, .original = 0},
-    BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + HIGH_REFRESH_SCALE,
-                       .bytes = HighRefreshWord(HIGH_REFRESH_SCALE), .checked = true,
-                       .original = 0},
+
+// Water ripples above 60 fps (Port of zortos293/Lichii#1152, by atk3001): the water renderer
+// (main+0x472E0) runs its ripple simulation trunc(step) * substeps times a frame (fcvtzs w9, s0 at
+// main+0x475F8), so below a step of 1 the rings Link makes in water freeze. That fcvtzs branches
+// to an accumulator that keeps the fractional step per water object (x21) in 8 slots in BSS
+// after Dark's timer state (main+0x4E9FE00, 16 bytes): a u32 round-robin index at +0x10, then
+// (u64 owner, f32 rest) slots with a 16-byte stride at +0x20, replaced round-robin when full.
+// It returns w9 = trunc(step + rest) and keeps the rest. Upstream puts it at main+0x3C46280,
+// inside our routine (+0x80..+0x8C), so it sits at +0x90 here: the same page, so its adrp is
+// upstream's word; only the two branches between the hook and it are re-encoded.
+constexpr size_t WATER_HOOK_OFFSET = 0x475F8;
+constexpr u32 WATER_FCVTZS = 0x1E380009;                        // fcvtzs w9, s0
+constexpr std::array<u8, 4> WATER_HOOK{0x26, 0xFB, 0xEF, 0x14}; // b 0x3c46290
+constexpr size_t WATER_ACCUMULATOR_OFFSET = HIGH_REFRESH_ROUTINE_OFFSET + 0x90;
+constexpr std::array<u8, 128> WATER_ACCUMULATOR{
+    0xC9, 0x92, 0x00, 0xB0, 0x29, 0x81, 0x38, 0x91, 0x0B, 0x01, 0x80, 0x52, 0x2A, 0x01,
+    0x40, 0xF9, 0x5F, 0x01, 0x15, 0xEB, 0x80, 0x02, 0x00, 0x54, 0x29, 0x41, 0x00, 0x91,
+    0x6B, 0x05, 0x00, 0x71, 0x61, 0xFF, 0xFF, 0x54, 0x29, 0x01, 0x02, 0xD1, 0x0B, 0x01,
+    0x80, 0x52, 0x2A, 0x01, 0x40, 0xF9, 0x6A, 0x01, 0x00, 0xB4, 0x29, 0x41, 0x00, 0x91,
+    0x6B, 0x05, 0x00, 0x71, 0x81, 0xFF, 0xFF, 0x54, 0x29, 0x41, 0x02, 0xD1, 0x2A, 0x01,
+    0x40, 0xB9, 0x4B, 0x05, 0x00, 0x11, 0x6B, 0x09, 0x00, 0x12, 0x2B, 0x01, 0x00, 0xB9,
+    0x29, 0x41, 0x00, 0x91, 0x29, 0x11, 0x0A, 0x8B, 0x35, 0x01, 0x00, 0xF9, 0x3F, 0x09,
+    0x00, 0xB9, 0x21, 0x09, 0x40, 0xBD, 0x00, 0x28, 0x21, 0x1E, 0x01, 0xC0, 0x25, 0x1E,
+    0x00, 0x38, 0x21, 0x1E, 0x20, 0x09, 0x00, 0xBD, 0x29, 0x00, 0x38, 0x1E, 0xBC, 0x04,
+    0x10, 0x17, // +0x7C b 0x475fc (upstream, from 0x3c46280: 0x171004c0)
 };
+// Dark's timer state and the ripple slots (ldr/str through adrp 0x4e9f000 + 0xe00 / + 0xe20).
+constexpr size_t HIGH_REFRESH_STATE_OFFSET = 0x4E9FE00;
+constexpr size_t HIGH_REFRESH_STATE_SIZE = 0xA0;
+
+// The code cave after the end of the code (main+0x3C46200; #1152 checks it is executable padding,
+// the text page runs on to main+0x3C47000) as the high refresh rate mode leaves it: its routine, a zero word, the water
+// ripple accumulator. Past Dark's 120 bytes every word must be free (zero) in the module.
+constexpr size_t OOT_CAVE_SIZE = 0x110;
+constexpr std::array<u8, OOT_CAVE_SIZE> HIGH_REFRESH_CAVE = [] {
+    std::array<u8, OOT_CAVE_SIZE> cave{};
+    std::ranges::copy(HIGH_REFRESH_ROUTINE, cave.begin());
+    std::ranges::copy(WATER_ACCUMULATOR,
+                      cave.begin() + (WATER_ACCUMULATOR_OFFSET - HIGH_REFRESH_ROUTINE_OFFSET));
+    return cave;
+}();
+static_assert(WATER_ACCUMULATOR_OFFSET - HIGH_REFRESH_ROUTINE_OFFSET + WATER_ACCUMULATOR.size() ==
+              OOT_CAVE_SIZE);
+
+// The call, Dark's 120 bytes, the water hook (over its fcvtzs), then the rest of the cave one word
+// at a time, each checked to be zero in the module.
+constexpr auto HIGH_REFRESH_RECORDS = [] {
+    constexpr size_t dark = DYNAMIC_FPS_ROUTINE.size();
+    std::array<BuiltinPatchRecord, 3 + (OOT_CAVE_SIZE - dark) / 4> records{};
+    records[0] = BuiltinPatchRecord{.module_offset = 0x6E6CC4, .bytes = DYNAMIC_FPS_CALL};
+    records[1] = BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET,
+                                    .bytes = std::span<const u8>{HIGH_REFRESH_CAVE}.first(dark)};
+    records[2] = BuiltinPatchRecord{.module_offset = WATER_HOOK_OFFSET,
+                                    .bytes = WATER_HOOK,
+                                    .checked = true,
+                                    .original = WATER_FCVTZS};
+    for (size_t i = 3, offset = dark; offset < OOT_CAVE_SIZE; ++i, offset += 4) {
+        records[i] = BuiltinPatchRecord{.module_offset = HIGH_REFRESH_ROUTINE_OFFSET + offset,
+                                        .bytes = std::span<const u8>{HIGH_REFRESH_CAVE}.subspan(offset, 4),
+                                        .checked = true,
+                                        .original = 0};
+    }
+    return records;
+}();
 constexpr std::string_view DYNAMIC_FPS_NAME = "Dynamic FPS by Dark (built-in)";
 constexpr std::string_view HIGH_REFRESH_NAME = "High refresh rate (built-in, experimental)";
 
@@ -209,6 +256,8 @@ constexpr std::array BUILTIN_PATCHES{
         .records = HIGH_REFRESH_RECORDS,
         .setting_enabled = &HighRefreshSettingOn,
         .replaces = DYNAMIC_FPS_NAME,
+        .state_offset = HIGH_REFRESH_STATE_OFFSET,
+        .state_size = HIGH_REFRESH_STATE_SIZE,
     },
     BuiltinPatch{
         .name = DYNAMIC_FPS_NAME,
@@ -234,6 +283,14 @@ constexpr std::array BUILTIN_PATCHES{
         .enable_env = "EDEN_NX2_OOT_POLL_BACKOFF",
     },
 };
+
+// Whether [offset, offset + size) of a module (offsets after its NSO header) lies in its BSS.
+bool InModuleBss(const Loader::NSOHeader& header, u64 offset, u64 size) {
+    const auto& data = header.segments[2];
+    const u64 bss_start = u64{data.location} + data.size;
+    const u64 bss_end = bss_start + data.bss_size;
+    return offset >= bss_start && offset <= bss_end && size <= bss_end - offset;
+}
 
 enum class TitleVersionFormat : u8 {
     ThreeElements, ///< vX.Y.Z
@@ -688,6 +745,11 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
         if (patch.build_id != build_id) {
             LOG_INFO(Loader, "    - Skipping \"{}\": build id {} is not {}", patch.name, build_id,
                      patch.build_id);
+            continue;
+        }
+        if (patch.state_size != 0 && !InModuleBss(header, patch.state_offset, patch.state_size)) {
+            LOG_WARNING(Loader, "    - Skipping \"{}\": its state at {}+{:#x} is outside BSS",
+                        patch.name, name, patch.state_offset);
             continue;
         }
         // Every record must fit and hold its original bytes, and none may have been patched by a
@@ -1498,13 +1560,21 @@ PatchManager::Metadata PatchManager::ParseControlNCA(const NCA& nca) const {
 }
 
 std::optional<size_t> OotHighRefreshScaleOffset(std::span<const u8> code) {
-    // The call, and the routine up to the scale word (the word may already hold another scale).
+    // The call, the water hook, and the cave but the scale word (it may hold another scale).
     const BuiltinPatchRecord& call = HIGH_REFRESH_RECORDS[0];
-    const auto routine = std::span<const u8>{HIGH_REFRESH_ROUTINE}.first(HIGH_REFRESH_SCALE);
-    if (code.size() < HIGH_REFRESH_ROUTINE_OFFSET + HIGH_REFRESH_ROUTINE.size() ||
+    const BuiltinPatchRecord& water = HIGH_REFRESH_RECORDS[2];
+    const auto cave = std::span<const u8>{HIGH_REFRESH_CAVE};
+    constexpr size_t after_scale = HIGH_REFRESH_SCALE + 4;
+    if (code.size() < HIGH_REFRESH_ROUTINE_OFFSET + OOT_CAVE_SIZE ||
         code.size() < call.module_offset + call.bytes.size() ||
+        code.size() < water.module_offset + water.bytes.size() ||
         !std::ranges::equal(code.subspan(call.module_offset, call.bytes.size()), call.bytes) ||
-        !std::ranges::equal(code.subspan(HIGH_REFRESH_ROUTINE_OFFSET, routine.size()), routine)) {
+        !std::ranges::equal(code.subspan(water.module_offset, water.bytes.size()), water.bytes) ||
+        !std::ranges::equal(code.subspan(HIGH_REFRESH_ROUTINE_OFFSET, HIGH_REFRESH_SCALE),
+                            cave.first(HIGH_REFRESH_SCALE)) ||
+        !std::ranges::equal(code.subspan(HIGH_REFRESH_ROUTINE_OFFSET + after_scale,
+                                         OOT_CAVE_SIZE - after_scale),
+                            cave.subspan(after_scale))) {
         return std::nullopt;
     }
     return HIGH_REFRESH_ROUTINE_OFFSET + HIGH_REFRESH_SCALE;
