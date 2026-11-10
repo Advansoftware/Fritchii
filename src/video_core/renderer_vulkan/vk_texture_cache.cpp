@@ -3160,10 +3160,15 @@ void Image::ReleaseToPool() {
         if (!key.valid || !image || image.IsUnbacked()) {
             return;
         }
-        // Dedicated allocations (block 0) and memory placed in host memory over budget are
-        // freed as before.
+        // Memory placed in host memory over budget is freed as before. Dedicated allocations
+        // (block 0) too with EXP42=1; EXP42=2 pools them as well (2026-11-10: in the Stalchild
+        // fight 2,295 images a 600 frames asked the pool and only 309 were ever given back, the
+        // big render targets such as a 1280x720 one remade up to 282 times being dedicated).
+        // The image keeps its own allocation either way.
         const vk::Image::MemoryBlock block = image.GetMemoryBlock();
-        if (block.block == 0 || block.size < MinPooledBytes || !image.IsDeviceLocal()) {
+        const bool dedicated = block.block == 0;
+        if ((dedicated && VideoCore::Nx2Debug::Experiment(42) < 2) || block.size < MinPooledBytes ||
+            !image.IsDeviceLocal()) {
             return;
         }
         if (ENABLE_MSAA_RESOLVE_CONSUME) {
