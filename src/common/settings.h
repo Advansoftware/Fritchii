@@ -678,7 +678,8 @@ struct Values {
     // Ocarina of Time above 60 fps (experimental, off by default): the "High refresh rate
     // (built-in)" patch makes the game's step always follow real time, below 1.0 too, and the
     // present pacing (nx2_gsv.h PaceToVblank) caps it at oot_high_refresh_cap instead of 60.
-    // Takes effect when the game starts; the cap also while it runs. The 30 FPS mode wins.
+    // Ctrl+U (and this setting in Configure) switch it while the game runs, no restart
+    // (FileSys::SwitchOotHighRefreshLive); the cap applies live too. The 30 FPS mode wins.
     SwitchableSetting<bool> oot_high_refresh{linkage,
                                              false,
                                              "oot_high_refresh",
