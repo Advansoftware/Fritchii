@@ -25,13 +25,14 @@ enum class Cause : u8 {
     FileThrottle, ///< IStorage::Read's sleep under 40 MB/s (game files, the one FS thread)
     FileRead,     ///< IStorage::Read's read itself
     HostMemory,   ///< host Map/Unmap/Protect of guest memory (placeholder lock included)
+    Recompile,    ///< the CPU recompiler compiling game code it hasn't seen (dynarmic GetBlock)
     Count,
 };
 
 /// Names in the hitch line, in Cause order.
-inline constexpr std::array<const char*, 9> CauseNames{
+inline constexpr std::array<const char*, 10> CauseNames{
     "full drains", "read-backs",  "save data",  "memory walks", "zero-page passes",
-    "file read throttle", "file reads", "host map/protect", "?"};
+    "file read throttle", "file reads", "host map/protect", "recompiling game code", "?"};
 
 struct Counters {
     std::array<std::atomic<u64>, static_cast<size_t>(Cause::Count)> ns{};

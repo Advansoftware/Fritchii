@@ -12,6 +12,7 @@
 
 #include <boost/icl/interval_set.hpp>
 #include "common/assert.h"
+#include "common/nx2_hitch.h"
 #include "dynarmic/common/fp/fpcr.h"
 #include "dynarmic/common/llvm_disassemble.h"
 #include <bit>
@@ -244,6 +245,8 @@ private:
     CodePtr GetBlock(IR::LocationDescriptor descriptor) {
         if (auto block = emitter.GetBasicBlock(descriptor))
             return block->entrypoint;
+        // Fritchii hitch attribution (2026-11-10): new game code compiled while the game waits.
+        const ::Common::Nx2Hitch::Scope hitch_timed{::Common::Nx2Hitch::Cause::Recompile};
 
         constexpr size_t MINIMUM_REMAINING_CODESIZE = 1 * 1024 * 1024;
         if (block_of_code.SpaceRemaining() < MINIMUM_REMAINING_CODESIZE) {

@@ -26,6 +26,8 @@ struct Snapshot {
     std::array<u64, Causes> count{};
     std::array<u64, Causes> longest{};
     u64 page_faults{};
+    u64 user_100ns{};   ///< the process's CPU time in user mode, all threads
+    u64 kernel_100ns{}; ///< and in kernel mode (page faults, VM calls, waits' bookkeeping)
 };
 
 Snapshot Take() {
@@ -39,6 +41,14 @@ Snapshot Take() {
     PROCESS_MEMORY_COUNTERS counters{};
     if (K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) {
         snapshot.page_faults = counters.PageFaultCount;
+    }
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+        const auto value = [](const FILETIME& time) {
+            return (u64{time.dwHighDateTime} << 32) | time.dwLowDateTime;
+        };
+        snapshot.user_100ns = value(user);
+        snapshot.kernel_100ns = value(kernel);
     }
 #endif
     return snapshot;
@@ -89,9 +99,12 @@ void OnPresent(long long gap_us) {
                                       static_cast<double>(now_ns - trim_since) / 1e6);
             }
             LOG_INFO(Render, // with the frame lines it lines up against
-                     "Hitch: {:.1f} ms between presents; in it: {}; page faults {}",
+                     "Hitch: {:.1f} ms between presents; in it: {}; page faults {}, CPU time "
+                     "{:.0f} ms user + {:.0f} ms kernel (all threads)",
                      static_cast<double>(gap_us) / 1e3, causes.empty() ? "nothing counted" : causes,
-                     now.page_faults - last.page_faults);
+                     now.page_faults - last.page_faults,
+                     static_cast<double>(now.user_100ns - last.user_100ns) / 1e4,
+                     static_cast<double>(now.kernel_100ns - last.kernel_100ns) / 1e4);
         }
     }
     last = now;
