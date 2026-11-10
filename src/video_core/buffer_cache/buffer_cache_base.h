@@ -781,7 +781,8 @@ private:
 
     [[nodiscard]] Binding StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
                                                bool native_pointer = false,
-                                               bool table_pointer = false) const;
+                                               bool table_pointer = false,
+                                               bool compute = false) const;
 
     void TraceTablePointer(bool compute, size_t stage, size_t ssbo_index, u32 cbuf_index,
                            u32 cbuf_offset, u32 indirect_offset, GPUVAddr holder,
@@ -1033,6 +1034,9 @@ private:
     VirtualRangeCache virtual_ranges;
     std::vector<MultiRangeSegment> graphics_segments;
     std::vector<MultiRangeSegment> compute_segments;
+    /// EDEN_NX2_GPU_PROFILE: SynchronizeBuffer counts its uploads as compute storage uploads
+    /// (set in BindHostComputeStorageBuffers).
+    bool count_compute_sync = false;
     u64 frame_tick = 0;
 
     /// EDEN_NX2_EXP18 (zortos293/Lichii#641): resolved bindings are kept while the GPU mappings
