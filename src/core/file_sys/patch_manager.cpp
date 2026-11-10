@@ -222,6 +222,10 @@ constexpr std::string_view DYNAMIC_FPS_NAME = "Dynamic FPS by Dark (built-in)";
 constexpr std::string_view HIGH_REFRESH_NAME = "High refresh rate (built-in, experimental)";
 
 bool HighRefreshSettingOn() {
+    // Tests boot either way without touching the player's config: EDEN_NX2_OOT_HIGH_REFRESH=0/1.
+    if (const char* const value = std::getenv("EDEN_NX2_OOT_HIGH_REFRESH"); value && *value) {
+        return *value != '0';
+    }
     return Settings::values.oot_high_refresh.GetValue();
 }
 
