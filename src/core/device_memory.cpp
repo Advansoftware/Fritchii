@@ -30,7 +30,11 @@ DeviceMemory::DeviceMemory()
     : buffer{Kernel::Board::Nintendo::Nx::KSystemControl::Init::GetIntendedMemorySize(),
              VirtualReserveSize} {
 #ifdef _WIN32
-    zero_trim_thread = std::jthread{[this](std::stop_token stop) { TrimZeroPages(stop); }};
+    // EDEN_NX2_ZERO_TRIM=0: no zero-page passes (A/B: their trims make the game fault the pages
+    // back in when it reuses them, ~180k faults in an area load, 2026-11-10).
+    if (const char* value = std::getenv("EDEN_NX2_ZERO_TRIM"); value == nullptr || value[0] != '0') {
+        zero_trim_thread = std::jthread{[this](std::stop_token stop) { TrimZeroPages(stop); }};
+    }
     if (const char* value = std::getenv("EDEN_NX2_MEM_OWNERS"); value == nullptr || value[0] != '0') {
         memory_probe_thread = std::jthread{[this](std::stop_token stop) { ProbeMemory(stop); }};
     }
