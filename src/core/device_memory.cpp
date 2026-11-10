@@ -55,6 +55,25 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
     std::mutex mutex;
     std::condition_variable_any wake;
     std::chrono::seconds interval = 5s;
+    // EDEN_NX2_ZERO_TRIM_IDLE=0: the old timing. Otherwise (2026-11-10) a pass waits while the
+    // game maps memory in bulk (loads, spawns: its working set query and ~20,000 VirtualUnlock
+    // calls share the address space with the guest's map calls, which stalled 10-14 ms during a
+    // pass in kill hitches), and a pass that trims little backs off to 5 minutes, not 1: after
+    // boot most passes trimmed 1-2 MiB for ~1 s of work.
+    static const bool idle_timing = [] {
+        const char* const value = std::getenv("EDEN_NX2_ZERO_TRIM_IDLE");
+        return value == nullptr || value[0] != '0';
+    }();
+    const auto mapped_bytes = [] {
+        using Common::Nx2Hitch::Cause;
+        u64 total = 0;
+        for (const Cause cause : {Cause::HostMap, Cause::HostUnmap, Cause::HostProtect}) {
+            total += Common::Nx2Hitch::g_counters.amount[static_cast<size_t>(cause)].load(
+                std::memory_order_relaxed);
+        }
+        return total;
+    };
+    const std::chrono::seconds max_interval = idle_timing ? 300s : 60s;
     while (true) {
         {
             std::unique_lock lock{mutex};
@@ -62,6 +81,21 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
         }
         if (stop.stop_requested()) {
             return;
+        }
+        // Busy: over 32 MiB mapped, unmapped or protected in the last half second. At most 10
+        // waits (5 s), then the pass runs anyway.
+        for (int wait = 0; idle_timing && wait < 10; ++wait) {
+            const u64 before = mapped_bytes();
+            {
+                std::unique_lock lock{mutex};
+                wake.wait_for(lock, stop, 500ms, [] { return false; });
+            }
+            if (stop.stop_requested()) {
+                return;
+            }
+            if (mapped_bytes() - before < (u64{32} << 20)) {
+                break;
+            }
         }
         const auto start = std::chrono::steady_clock::now();
         Common::Nx2Hitch::ZeroTrimBegin();
@@ -80,11 +114,11 @@ void DeviceMemory::TrimZeroPages(std::stop_token stop) {
                          "working set query {} ms, page reads {} ms, {} unlock runs {} ms "
                          "(longest {:.1f})",
                          trimmed >> 20, resident >> 20, ms,
-                         (std::min)(interval * 2, std::chrono::seconds{60}).count(),
+                         (std::min)(interval * 2, std::chrono::seconds{max_interval}).count(),
                          phases.query_us / 1000, phases.scan_us / 1000, phases.unlock_runs,
                          phases.unlock_us / 1000, static_cast<double>(phases.longest_unlock_us) / 1e3);
             }
-            interval = (std::min)(interval * 2, std::chrono::seconds{60});
+            interval = (std::min)(interval * 2, std::chrono::seconds{max_interval});
             continue;
         }
         interval = 5s;
