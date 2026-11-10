@@ -421,6 +421,10 @@ inline void LoadExperiments() {
         // -> 0, worst frames 140-180 -> 30-48 ms, moving median 42.2 -> 46.9 fps; skeleton fight
         // 5.1-5.5 GB instead of 10.9 with 0 evictions; two owner playtests without glitches.
         g_experiments[58].store(1, std::memory_order_relaxed);
+        // EXP61 = 1 (2026-11-10): FlushCommands submits nothing when nothing was recorded since
+        // the last submit. Castle Town live toggle: empty submits 4,600 -> 145 a second, 43.0 ->
+        // 45.6 fps (3 of 4 pairs, the 4th a tie), GPU thread split drain 432 -> 396 ms/s.
+        g_experiments[61].store(1, std::memory_order_relaxed);
         // EXP39 = 3: publish to a back that waits after 8 words, no snapshot refresh of entries
         // that ran (zortos293/Lichii#805 62db242b34; see the EXP39 notes above). Timing only.
         g_experiments[39].store(3, std::memory_order_relaxed);
