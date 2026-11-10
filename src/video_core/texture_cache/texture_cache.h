@@ -905,29 +905,45 @@ void TextureCache<P>::SweepColdImages() {
             continue;
         }
         bool superseded = false; // EXP58 chose it
+        constexpr u64 SupersededFrames = 60;
+        // EDEN_NX2_EXP58=2 (live): images the CPU read once go the same way (below). Owner's
+        // Castle Town market + shooting gallery session: 150-170k "kept as read later" a window,
+        // ~6,000 images and device memory at the collector's line with EXP58=1.
+        const int sweep_mode = VideoCore::Nx2Debug::Experiment(58);
         if (True(image.flags & ImageFlagBits::GpuModified)) {
             // Its contents exist only on the GPU and the collector would not download them
             // either (BadOverlap): only where nothing says they may be read again.
             if (image.relocation_guard_noted != 0 || image.info.forced_flushed ||
                 image.info.dma_downloaded) {
-                ++cold_kept_read;
-                drop();
-                continue;
+                const u64 age = frame_tick - lru_cache.Tick(image.lru_index);
+                if (sweep_mode >= 2 && age < SupersededFrames &&
+                    frame_tick - watched_at <= MaxWatchFrames) {
+                    ++index; // looked at again when old enough
+                    continue;
+                }
+                // A newer target of another shape owns that memory now: a CPU read there goes
+                // to it, not to this image.
+                if (sweep_mode < 2 || age < SupersededFrames || !ColdSuperseded(image_id, image)) {
+                    ++cold_kept_read;
+                    drop();
+                    continue;
+                }
+                superseded = true;
             }
             const auto shape = relocation_shapes.find(RelocationShapeKey(image.info));
             const u8 guard = shape != relocation_shapes.end() ? shape->second.guard : 0;
-            if ((guard & GuardCpuRead) != 0 ||
-                (!sweep_guarded && (guard & (GuardSampled | GuardLoaded)) != 0)) {
+            if (!superseded &&
+                ((guard & GuardCpuRead) != 0 ||
+                 (!sweep_guarded && (guard & (GuardSampled | GuardLoaded)) != 0))) {
                 // EDEN_NX2_EXP58 (live, 0 = off; fable52_answer_2 3.3 step 4): a guarded image
                 // still dies once it has been untouched for SupersededFrames and a render target
                 // of another shape, touched since, covers its memory: the game reused that memory
                 // for another layout, so the old contents have no reader left. Deleted without a
                 // download, as the collector would. The guard was made for relocation (same
                 // shape, live contents); these piled up (350k "kept" in 600 frames) until the
-                // collector's bursts. Never for shapes the CPU read.
-                constexpr u64 SupersededFrames = 60;
+                // collector's bursts. Shapes the CPU read only with EXP58=2.
                 const bool superseded_sweep =
-                    VideoCore::Nx2Debug::Experiment(58) != 0 && (guard & GuardCpuRead) == 0;
+                    sweep_mode != 0 && ((guard & GuardCpuRead) == 0 || sweep_mode >= 2);
                 const u64 age = frame_tick - lru_cache.Tick(image.lru_index);
                 if (superseded_sweep && age < SupersededFrames &&
                     frame_tick - watched_at <= MaxWatchFrames) {
