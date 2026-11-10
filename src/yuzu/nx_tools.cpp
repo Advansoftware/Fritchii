@@ -43,6 +43,7 @@
 
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
+#include "common/logging.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/common_funcs.h"
 #include "core/file_sys/decrypted_nca.h"
@@ -337,10 +338,16 @@ struct NxTools::Job {
         std::string error = "file not found";
         // An XCI goes in as a whole decrypted gamecard image, so nxformat keeps the firmware of
         // its update partition. Other packages go in as a decrypted NSP.
-        std::string ignored;
-        auto decrypted = file != nullptr ? FileSys::OpenDecryptedGamecard(file, ignored) : nullptr;
+        std::string gamecard_error;
+        auto decrypted =
+            file != nullptr ? FileSys::OpenDecryptedGamecard(file, gamecard_error) : nullptr;
         const bool gamecard = decrypted != nullptr;
         if (!gamecard && file != nullptr) {
+            if (gamecard_error != "not a gamecard image") {
+                LOG_WARNING(Frontend,
+                            "{}: converted without its gamecard update partition (firmware): {}",
+                            ToUtf8(path.filename()), gamecard_error);
+            }
             decrypted = FileSys::OpenDecryptedPackage(file, error);
         }
         if (decrypted == nullptr) {

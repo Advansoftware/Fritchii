@@ -656,8 +656,9 @@ VirtualFile OpenDecryptedGamecard(VirtualFile image, std::string& error) {
     std::map<s64, VirtualFile> replaced;
     replaced.emplace(0x100,
                      std::make_shared<VectorVfsFile>(std::vector<u8>{'D', 'X', 'C', 'I'}, "magic"));
+    // The files of every partition but update, which is the console firmware and stays as it is.
+    std::vector<Hfs0Entry> files;
     for (const auto& partition : *partitions) {
-        // The update partition is the console firmware: it stays as it is.
         if (partition.name == "update") {
             continue;
         }
@@ -666,31 +667,36 @@ VirtualFile OpenDecryptedGamecard(VirtualFile image, std::string& error) {
             error = fmt::format("invalid {} partition", partition.name);
             return nullptr;
         }
-        for (const auto& entry : *entries) {
-            auto file =
-                std::make_shared<OffsetVfsFile>(image, entry.size, entry.offset, entry.name);
-            if (entry.name.ends_with(".tik") &&
-                !Core::Crypto::KeyManager::Instance().AddTicket(Core::Crypto::Ticket::Read(file))) {
-                LOG_WARNING(Common_Filesystem, "Could not load ticket {}", entry.name);
-            }
-            if (entry.name.ends_with(".ncz")) {
-                error = "compressed NCZ content is not supported: decompress the package first";
-                return nullptr;
-            }
-            if (!entry.name.ends_with(".nca")) {
-                continue;
-            }
-            auto plain = OpenDecryptedNca(file, error);
-            if (plain == nullptr) {
-                error = fmt::format("{}: {}", entry.name, error);
-                return nullptr;
-            }
-            if (plain->GetSize() != static_cast<std::size_t>(entry.size)) {
-                error = fmt::format("{}: the decrypted NCA has another size", entry.name);
-                return nullptr;
-            }
-            replaced.insert_or_assign(entry.offset, std::move(plain));
+        files.insert(files.end(), entries->begin(), entries->end());
+    }
+    // Tickets first: an NCA may come before its ticket.
+    for (const auto& entry : files) {
+        if (entry.name.ends_with(".tik") &&
+            !Core::Crypto::KeyManager::Instance().AddTicket(Core::Crypto::Ticket::Read(
+                std::make_shared<OffsetVfsFile>(image, entry.size, entry.offset)))) {
+            LOG_WARNING(Common_Filesystem, "Could not load ticket {}", entry.name);
         }
+    }
+    for (const auto& entry : files) {
+        if (entry.name.ends_with(".ncz")) {
+            error = "compressed NCZ content is not supported: decompress the package first";
+            return nullptr;
+        }
+        if (!entry.name.ends_with(".nca")) {
+            continue;
+        }
+        auto plain = OpenDecryptedNca(
+            std::make_shared<OffsetVfsFile>(image, entry.size, entry.offset, entry.name), error);
+        if (plain == nullptr) {
+            error = fmt::format("{}: {}", entry.name, error);
+            return nullptr;
+        }
+        // A sparse NCA grows when decrypted; it cannot keep its place in the image.
+        if (plain->GetSize() != static_cast<std::size_t>(entry.size)) {
+            error = fmt::format("{}: the decrypted NCA has another size (sparse NCA)", entry.name);
+            return nullptr;
+        }
+        replaced.insert_or_assign(entry.offset, std::move(plain));
     }
 
     std::vector<VirtualFile> parts;
