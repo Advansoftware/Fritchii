@@ -162,6 +162,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/common_funcs.h"
 #include "core/file_sys/nup_writer.h"
+#include "core/file_sys/patch_manager.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/savedata_factory.h"
 
@@ -1514,7 +1515,10 @@ void MainWindow::InitializeHotkeys() {
     connect_shortcut(QStringLiteral("Audio Volume Up"), &MainWindow::OnIncreaseVolume);
 
     connect_shortcut(QStringLiteral("Toggle Framerate Limit"), [this] {
-        Settings::ToggleStandardMode();
+        // Ocarina of Time: its high refresh rate mode instead (unlocked, its logic ran fast).
+        if (!ToggleOotHighRefresh()) {
+            Settings::ToggleStandardMode();
+        }
         SetFPSSuffix();
     });
 
@@ -3956,6 +3960,12 @@ void MainWindow::OnConfigure() {
     UpdateStatusButtons();
     controller_dialog->refreshConfiguration();
     QtCommon::system->ApplySettings();
+
+    // Ocarina of Time: its high refresh rate checkbox switches the running game too.
+    if (IsOotRunning() &&
+        Settings::values.oot_high_refresh.GetValue() != Settings::OotHighRefreshPatched()) {
+        SetOotHighRefresh(Settings::values.oot_high_refresh.GetValue());
+    }
 }
 
 void MainWindow::OnConfigureTas() {
@@ -5306,6 +5316,75 @@ void MainWindow::OnToggleOotFrameRate() {
     config->SaveAllValues();
 }
 
+bool MainWindow::IsOotRunning() const {
+    constexpr u64 OcarinaOfTime = 0x0400486024DEC000ULL;
+    return emulation_running &&
+           QtCommon::system->GetApplicationProcessProgramID() == OcarinaOfTime;
+}
+
+bool MainWindow::ToggleOotHighRefresh() {
+    if (!IsOotRunning()) {
+        return false;
+    }
+    SetOotHighRefresh(!Settings::OotHighRefreshPatched());
+    return true;
+}
+
+void MainWindow::SetOotHighRefresh(bool on) {
+    QString text;
+    switch (FileSys::SwitchOotHighRefreshLive(*QtCommon::system, on)) {
+    case FileSys::OotHighRefreshSwitch::Switched: {
+        Settings::values.oot_high_refresh.SetValue(on);
+        config->SaveAllValues();
+        const bool fps30 = Settings::values.oot_30fps.GetValue();
+        if (!on) {
+            text = fps30 ? tr("High refresh: off (30 FPS)") : tr("High refresh: off (60 FPS)");
+            break;
+        }
+        if (fps30) {
+            text = tr("High refresh: on, but the 30 FPS mode wins");
+            break;
+        }
+        int hz = 0;
+        switch (Settings::values.oot_high_refresh_cap.GetValue()) {
+        case Settings::OotRefreshCap::Hz90:
+            hz = 90;
+            break;
+        case Settings::OotRefreshCap::Hz120:
+            hz = 120;
+            break;
+        case Settings::OotRefreshCap::Hz144:
+            hz = 144;
+            break;
+        case Settings::OotRefreshCap::Hz165:
+            hz = 165;
+            break;
+        case Settings::OotRefreshCap::Display:
+        default:
+            break;
+        }
+        text = hz != 0 ? tr("High refresh: on (%1 FPS cap)").arg(hz)
+                       : tr("High refresh: on (monitor refresh cap)");
+        break;
+    }
+    case FileSys::OotHighRefreshSwitch::DisabledInAddOns:
+        text = tr("High refresh: off in Add-Ons");
+        break;
+    case FileSys::OotHighRefreshSwitch::Busy:
+        text = tr("High refresh: busy, try again");
+        break;
+    case FileSys::OotHighRefreshSwitch::UnknownCode:
+        text = tr("High refresh: can't switch, a mod or Add-Ons changed that code");
+        break;
+    case FileSys::OotHighRefreshSwitch::NotRunning:
+    default:
+        text = tr("High refresh: can't switch in this game version");
+        break;
+    }
+    statusBar()->showMessage(text, 4000);
+    SetFPSSuffix();
+}
+
 void MainWindow::UpdateDockedButton() {
     const auto console_mode = Settings::values.use_docked_mode.GetValue();
     dock_status_button->setChecked(Settings::IsDockedMode());
@@ -5531,10 +5610,16 @@ void MainWindow::SetFPSSuffix() {
     case Settings::SpeedMode::Turbo:
         m_fpsSuffix = tr("Turbo");
         break;
-    case Settings::SpeedMode::Standard:
+    case Settings::SpeedMode::Standard: {
         const bool limited = Settings::SpeedLimitEnabled();
-        m_fpsSuffix = limited ? QString{} : tr("Unlocked");
+        if (IsOotRunning() && Settings::OotHighRefreshPatched() &&
+            !Settings::values.oot_30fps.GetValue()) {
+            m_fpsSuffix = limited ? tr("High refresh") : tr("High refresh, unlocked");
+        } else {
+            m_fpsSuffix = limited ? QString{} : tr("Unlocked");
+        }
         break;
+    }
     }
 }
 

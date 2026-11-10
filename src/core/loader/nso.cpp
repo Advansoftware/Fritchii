@@ -347,6 +347,13 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
             oot_high_refresh_scale ? load_base + module_start + *oot_high_refresh_scale : 0;
         process.SetOotHighRefreshScaleAddress(scale_address);
         Settings::SetOotHighRefreshPatched(scale_address != 0);
+        // Ctrl+U switches the mode live (FileSys::SwitchOotHighRefreshLive), where its state fits.
+        const auto& data = nso_header.segments[2];
+        const u64 bss_start = u64{data.location} + data.size;
+        process.SetOotMainCodeAddress(
+            FileSys::OotHighRefreshStateInBss(bss_start, bss_start + data.bss_size)
+                ? load_base + module_start
+                : 0);
         if (scale_address != 0) {
             LOG_INFO(Loader, "Ocarina of Time: high refresh rate patch on, speed scale at {:#x}",
                      scale_address);

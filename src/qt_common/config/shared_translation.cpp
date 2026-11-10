@@ -331,7 +331,8 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, oot_high_refresh_cap, tr("OoT: high refresh rate (experimental)"),
            tr("Lets Ocarina of Time run above 60 FPS, up to the chosen cap, at its normal speed. "
               "Untested in much of the game: timers, cutscenes or minigames may run off. Takes "
-              "effect when the game starts; the 30 FPS mode overrides it."));
+              "effect at once; Ctrl+U switches it while you play. The 30 FPS mode overrides "
+              "it."));
     INSERT(Settings, mkw_30fps, tr("Mario Kart World: 30 FPS mode"),
            tr("Forces the game to use its native 30 FPS mode at normal game speed. "
               "Takes effect after restarting the game."));
