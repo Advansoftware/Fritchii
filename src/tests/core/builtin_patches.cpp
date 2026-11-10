@@ -63,6 +63,25 @@ void WriteIps(const std::filesystem::path& path, u32 word) {
     file.write(reinterpret_cast<const char*>(ips.data()), static_cast<std::streamsize>(ips.size()));
 }
 
+// An IPS (24-bit offsets) or IPS32 file with one record: `bytes` at `offset` of the NSO file.
+std::vector<u8> MakeIps(bool ips32, u32 offset, std::span<const u8> bytes) {
+    std::vector<u8> ips;
+    if (ips32) {
+        ips = {'I', 'P', 'S', '3', '2', static_cast<u8>(offset >> 24)};
+    } else {
+        ips = {'P', 'A', 'T', 'C', 'H'};
+    }
+    ips.insert(ips.end(), {static_cast<u8>(offset >> 16), static_cast<u8>(offset >> 8),
+                           static_cast<u8>(offset), static_cast<u8>(bytes.size() >> 8),
+                           static_cast<u8>(bytes.size())});
+    ips.insert(ips.end(), bytes.begin(), bytes.end());
+    if (ips32) {
+        ips.push_back('E');
+    }
+    ips.insert(ips.end(), {'E', 'O', 'F'});
+    return ips;
+}
+
 class PatchManagerTestContext {
 public:
     explicit PatchManagerTestContext(std::optional<u32> user_mod_word = std::nullopt) {
@@ -124,6 +143,21 @@ public:
         file.write(reinterpret_cast<const char*>(ips.data()), static_cast<std::streamsize>(ips.size()));
         file.flush();
         REQUIRE(file.good());
+    }
+
+    // Writes `contents` as <load>/<Ocarina>/<mod>/exefs/<file_name>; returns its path.
+    std::filesystem::path AddModFile(std::string_view mod, std::string_view file_name,
+                                     std::span<const u8> contents) {
+        const auto exefs =
+            root / "load" / fmt::format("{:016X}", OcarinaTitleId) / std::string{mod} / "exefs";
+        std::filesystem::create_directories(exefs);
+        const auto path = exefs / std::string{file_name};
+        std::ofstream file{path, std::ios::binary};
+        file.write(reinterpret_cast<const char*>(contents.data()),
+                   static_cast<std::streamsize>(contents.size()));
+        file.flush();
+        REQUIRE(file.good());
+        return path;
     }
 
 private:
@@ -268,17 +302,20 @@ TEST_CASE("Built-in patches preserve user overrides on already-patched input", "
     constexpr u32 RoutineLastByte = sizeof(Loader::NSOHeader) + 0x3C46200 + 119;
     constexpr std::array<u8, 4> DynamicCall{0x4F, 0x7D, 0xD5, 0x94};
 
-    auto nso = MakeMain(OcarinaBuildId, NopInstruction);
+    auto nso = MakeMain(OcarinaBuildId, TbzInstruction);
     nso.resize(RoutineLastByte + 1);
     nso = context.Manager().PatchNSO(nso, "main");
     REQUIRE(nso.size() == RoutineLastByte + 1);
     REQUIRE(std::equal(DynamicCall.begin(), DynamicCall.end(), nso.begin() + CallOffset));
     REQUIRE(nso[RoutineLastByte] == 0x3F);
+    REQUIRE(WordAt(nso) == BranchInstruction);
 
+    // Over Max Resolution's branch (a mod writing into Dark's routine is his standalone Dynamic
+    // FPS, which the built-in replaces: see below).
     constexpr u8 UserByte = 0x5A;
-    context.AddUserBytePatch(RoutineLastByte, UserByte);
+    context.AddUserBytePatch(PatchOffset, UserByte);
     auto expected = nso;
-    expected[RoutineLastByte] = UserByte;
+    expected[PatchOffset] = UserByte;
     const auto patched = context.Manager().PatchNSO(nso, "main");
     REQUIRE(std::ranges::equal(patched, expected));
 }
@@ -504,5 +541,78 @@ TEST_CASE("High refresh rate mode switches live between the two boot layouts",
         REQUIRE_FALSE(FileSys::OotHighRefreshStateInBss(0x4E9FE01, 0x5100000));
         REQUIRE_FALSE(FileSys::OotHighRefreshStateInBss(0x4100000, 0x4E9FE9F));
         REQUIRE_FALSE(FileSys::OotHighRefreshStateInBss(0, 0));
+    }
+}
+
+TEST_CASE("Dark's standalone Dynamic FPS mod is skipped and hidden for the built-in",
+          "[patch_manager]") {
+    constexpr std::string_view DynamicFps = "Dynamic FPS by Dark (built-in)";
+    constexpr size_t Code = sizeof(Loader::NSOHeader);
+    constexpr u32 CallOffset = Code + 0x6E6CC4;
+    constexpr std::array<u8, 4> DynamicCall{0x4F, 0x7D, 0xD5, 0x94};
+    constexpr std::array<u8, 4> Nop{0x1F, 0x20, 0x03, 0xD5};
+    const auto ips_name = fmt::format("{}.ips", OcarinaBuildIdHex);
+    const auto listed = [](const FileSys::PatchManager& manager, std::string_view name) {
+        const auto patches = manager.GetPatches();
+        return std::ranges::find(patches, name, &FileSys::Patch::name) != patches.end();
+    };
+
+    PatchManagerTestContext context;
+    auto nso = MakeOcarinaMain();
+    std::memcpy(nso.data() + PatchOffset, &TbzInstruction, sizeof(TbzInstruction));
+    // What boots without mods: Dark's call and Max Resolution's branch.
+    const auto builtin = context.Manager().PatchNSO(nso, "main");
+    REQUIRE(std::equal(DynamicCall.begin(), DynamicCall.end(), builtin.begin() + CallOffset));
+    REQUIRE(WordAt(builtin) == BranchInstruction);
+
+    SECTION("An IPS writing Dark's call: skipped, not listed, the built-in applied") {
+        const auto ips = MakeIps(false, CallOffset, Nop);
+        const auto path = context.AddModFile("Dynamic FPS", ips_name, ips);
+        REQUIRE(context.Manager().PatchNSO(nso, "main") == builtin);
+        REQUIRE_FALSE(listed(context.Manager(), "Dynamic FPS"));
+        REQUIRE(listed(context.Manager(), DynamicFps));
+        // The player's files stay as they were.
+        REQUIRE(std::filesystem::file_size(path) == ips.size());
+    }
+
+    SECTION("An IPSwitch patch writing into Dark's routine: the same") {
+        constexpr std::string_view Pchtxt = "@nsobid-E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348\n"
+                                            "@flag offset_shift 0x100\n"
+                                            "@enabled\n"
+                                            "03C46274 00000000\n"
+                                            "@stop\n";
+        context.AddModFile("Dynamic FPS 60", "dynamic_fps.pchtxt",
+                           {reinterpret_cast<const u8*>(Pchtxt.data()), Pchtxt.size()});
+        REQUIRE(context.Manager().PatchNSO(nso, "main") == builtin);
+        REQUIRE_FALSE(listed(context.Manager(), "Dynamic FPS 60"));
+        REQUIRE(listed(context.Manager(), DynamicFps));
+    }
+
+    SECTION("A mod patching an unrelated offset still applies and is listed") {
+        constexpr u32 Unrelated = Code + 0x1000;
+        context.AddModFile("Other mod", ips_name, MakeIps(true, Unrelated, Nop));
+        auto expected = builtin;
+        std::ranges::copy(Nop, expected.begin() + Unrelated);
+        REQUIRE(context.Manager().PatchNSO(nso, "main") == expected);
+        REQUIRE(listed(context.Manager(), "Other mod"));
+    }
+
+    SECTION("Next to an unrelated mod, only the Dynamic FPS mod is left out") {
+        constexpr u32 Unrelated = Code + 0x1000;
+        context.AddModFile("Dynamic FPS", ips_name, MakeIps(false, CallOffset, Nop));
+        context.AddModFile("Other mod", ips_name, MakeIps(true, Unrelated, Nop));
+        auto expected = builtin;
+        std::ranges::copy(Nop, expected.begin() + Unrelated);
+        REQUIRE(context.Manager().PatchNSO(nso, "main") == expected);
+        REQUIRE(listed(context.Manager(), "Other mod"));
+        REQUIRE_FALSE(listed(context.Manager(), "Dynamic FPS"));
+    }
+
+    SECTION("A mod patching Max Resolution's word still wins over that built-in") {
+        context.AddModFile("Other mod", ips_name, MakeIps(true, PatchOffset, Nop));
+        const auto patched = context.Manager().PatchNSO(nso, "main");
+        REQUIRE(WordAt(patched) == NopInstruction);
+        REQUIRE(std::equal(DynamicCall.begin(), DynamicCall.end(), patched.begin() + CallOffset));
+        REQUIRE(listed(context.Manager(), "Other mod"));
     }
 }

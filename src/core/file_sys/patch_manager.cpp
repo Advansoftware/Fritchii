@@ -425,6 +425,55 @@ std::string GetUpdateVersionStringFromSlot(const ContentProvider* provider, u64 
 YUZU_NO_INLINE std::optional<u64> GetParentApplicationId(const ContentProvider* provider, u64 title_id) {
     return provider == nullptr ? std::nullopt : provider->GetParentApplicationId(title_id);
 }
+
+// The IPS and IPSwitch patches in a mod's exefs for the NSO with this build id (hex, padded with
+// zeros to 64 digits).
+std::vector<VirtualFile> ModPatchFiles(const VirtualDir& mod, const std::string& nso_build_id) {
+    std::vector<VirtualFile> out;
+    const auto exefs_dir = FindSubdirectoryCaseless(mod, "exefs");
+    if (exefs_dir == nullptr) {
+        return out;
+    }
+    for (const auto& file : exefs_dir->GetFiles()) {
+        if (file->GetExtension() == "ips") {
+            auto name = file->GetName();
+            const auto this_build_id = fmt::format("{:0<64}", name.substr(0, name.find('.')));
+            if (nso_build_id == this_build_id)
+                out.push_back(file);
+        } else if (file->GetExtension() == "pchtxt") {
+            IPSwitchCompiler compiler{file};
+            const auto this_build_id = Common::HexToString(compiler.GetBuildID());
+            if (nso_build_id == this_build_id)
+                out.push_back(file);
+        }
+    }
+    return out;
+}
+
+// Whether a mod is Dark's standalone Dynamic FPS, which Fritchii has built in: one of its patches
+// for Ocarina's main writes into the built-in's records (the call or the routine). Such a mod is
+// left out (not applied, not listed in Add-Ons) so the built-in, which the high refresh rate mode
+// switches live, is applied in its place. Mods overlapping the other built-ins still win.
+bool IsBuiltinDynamicFpsMod(u64 title_id, const VirtualDir& mod) {
+    const auto it = std::ranges::find(BUILTIN_PATCHES, DYNAMIC_FPS_NAME, &BuiltinPatch::name);
+    if (it == BUILTIN_PATCHES.end() || it->title_id != title_id || mod == nullptr) {
+        return false;
+    }
+    const auto overlaps = [&](const std::pair<u64, u64>& range) {
+        return std::ranges::any_of(it->records, [&](const BuiltinPatchRecord& record) {
+            const u64 begin = sizeof(Loader::NSOHeader) + record.module_offset;
+            return range.first < begin + record.bytes.size() && begin < range.second;
+        });
+    };
+    for (const auto& file : ModPatchFiles(mod, fmt::format("{:0<64}", it->build_id))) {
+        const auto ranges = file->GetExtension() == "ips" ? GetIPSWriteRanges(file)
+                                                          : IPSwitchCompiler{file}.GetWriteRanges();
+        if (std::ranges::any_of(ranges, overlaps)) {
+            return true;
+        }
+    }
+    return false;
+}
 } // Anonymous namespace
 
 PatchManager::PatchManager(u64 title_id_,
@@ -649,22 +698,8 @@ std::vector<VirtualFile> PatchManager::CollectPatches(const std::vector<VirtualD
         if (std::find(disabled.cbegin(), disabled.cend(), subdir->GetName()) != disabled.cend())
             continue;
 
-        auto exefs_dir = FindSubdirectoryCaseless(subdir, "exefs");
-        if (exefs_dir != nullptr) {
-            for (const auto& file : exefs_dir->GetFiles()) {
-                if (file->GetExtension() == "ips") {
-                    auto name = file->GetName();
-                    const auto this_build_id = fmt::format("{:0<64}", name.substr(0, name.find('.')));
-                    if (nso_build_id == this_build_id)
-                        out.push_back(file);
-                } else if (file->GetExtension() == "pchtxt") {
-                    IPSwitchCompiler compiler{file};
-                    const auto this_build_id = Common::HexToString(compiler.GetBuildID());
-                    if (nso_build_id == this_build_id)
-                        out.push_back(file);
-                }
-            }
-        }
+        const auto files = ModPatchFiles(subdir, nso_build_id);
+        out.insert(out.end(), files.begin(), files.end());
     }
     return out;
 }
@@ -708,6 +743,19 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
     auto patch_dirs = load_dir->GetSubdirectories();
     std::sort(patch_dirs.begin(), patch_dirs.end(),
               [](const VirtualDir& l, const VirtualDir& r) { return l->GetName() < r->GetName(); });
+    // Dark's standalone Dynamic FPS: the built-in is applied instead (the player's files stay).
+    std::erase_if(patch_dirs, [&](const VirtualDir& mod) {
+        if (!IsBuiltinDynamicFpsMod(title_id, mod)) {
+            return false;
+        }
+        if (name == "main") {
+            LOG_INFO(Loader,
+                     "    - Skipping mod \"{}\": it is Dark's Dynamic FPS, which Fritchii has "
+                     "built in",
+                     mod->GetName());
+        }
+        return true;
+    });
     const auto patches = CollectPatches(patch_dirs, build_id);
 
     auto out = nso;
@@ -1298,6 +1346,10 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
             }
 
         for (const auto& mod : mod_dir->GetSubdirectories()) {
+            // Not listed: Fritchii's built-in Dynamic FPS (listed below) is used instead.
+            if (IsBuiltinDynamicFpsMod(title_id, mod)) {
+                continue;
+            }
             std::string types;
 
             const auto exefs_dir = FindSubdirectoryCaseless(mod, "exefs");
