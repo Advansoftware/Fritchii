@@ -23,6 +23,7 @@
 
 #include "common/alignment.h"
 #include "common/memory_detect.h"
+#include "common/memory_detect.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/slot_vector.h"
@@ -32,6 +33,7 @@
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/texture_cache/host_memory_limit.h"
 #include "video_core/texture_cache/image_view_base.h"
 #include "video_core/texture_cache/conversion.h"
 #include "video_core/texture_cache/samples_helper.h"
@@ -533,6 +535,17 @@ void TextureCache<P>::TickFrame() {
                     }
                     critical_memory =
                         budget - (std::min)(margin + pressure_margin + slack_margin, budget / 2);
+                    // zortos293/Lichii#1210: the device's budget is not all the room there is.
+                    // Windows charges device memory to the system's commit limit, so the cache
+                    // may also hold no more than the device memory in use plus the commit still
+                    // free, less 2 GiB (HostCriticalMemory; an OoT out-of-memory crash on a PC
+                    // with 16 GiB of RAM). The usage is the driver's.
+                    const std::optional<u64> commit_room = Common::GetSystemCommitRoom();
+                    const u64 host_critical =
+                        commit_room
+                            ? HostCriticalMemory(runtime.GetDeviceMemoryUsage(), *commit_room)
+                            : (std::numeric_limits<u64>::max)();
+                    critical_memory = (std::min)(critical_memory, host_critical);
                     expected_memory = critical_memory - (std::min)(margin, critical_memory / 2);
                     ApplyThresholdOverrides(false);
                     // Log the first values and real changes (the budget moves by a few MiB all
@@ -552,6 +565,13 @@ void TextureCache<P>::TickFrame() {
                         LOG_INFO(HW_GPU,
                                  "Memory margins: base {} MiB, out of memory {} MiB, block slack {} MiB",
                                  margin >> 20, pressure_margin >> 20, slack_margin >> 20);
+                        if (commit_room) {
+                            LOG_INFO(HW_GPU, "Host memory: {} MiB of commit left, {}",
+                                     *commit_room >> 20,
+                                     critical_memory == host_critical
+                                         ? "which bounds the thresholds"
+                                         : "the device budget bounds the thresholds");
+                        }
                     }
                 }
             }
