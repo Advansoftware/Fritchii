@@ -420,6 +420,8 @@ enum class Counter : u32 {
     ComputeStorageBytes,     ///< Their bound sizes
     ComputeSyncUploads,      ///< Their SynchronizeBuffer calls that uploaded something
     ComputeSyncBytes,        ///< Bytes those uploaded
+    ComputeSyncDirtyWalks,   ///< Their synchronizes under EDEN_NX2_EXP59 & 4 or & 8 (dirty-word walk)
+    ComputeSyncDirtySkips,   ///< Of those, all tracker words clean: the binding skipped entirely
     RangeCacheHits,          ///< Compute VirtualRangeCache::Query answered from the cache
     RangeCacheMisses,        ///< Compute VirtualRangeCache::Query that walked the page table
     StorageBindingHits,      ///< Compute StorageBufferBinding answered from its 4-way cache
@@ -708,17 +710,24 @@ inline void Report(const char* thread_name = "GPU thread") {
         const u64 dispatches = data.count[static_cast<size_t>(Zone::Compute)];
         if (dispatches != 0 || data.counters[static_cast<size_t>(Counter::ComputeStorageBindings)] != 0) {
             constexpr double MiB = 1024.0 * 1024.0;
+            // EDEN_NX2_EXP59 & 4 / & 8: synchronizes that found every tracker word clean.
+            const std::string dirty_walk =
+                data.counters[static_cast<size_t>(Counter::ComputeSyncDirtyWalks)] == 0
+                    ? std::string{}
+                    : fmt::format(", dirty-word walk (EXP59) skipped {:.0f} of {:.0f}",
+                                  rate(Counter::ComputeSyncDirtySkips),
+                                  rate(Counter::ComputeSyncDirtyWalks));
             LOG_INFO(HW_GPU,
                      "{} compute bindings per second: {:.0f} dispatches, storage bound {:.1f} MiB "
                      "in {:.0f} bindings, synchronized/uploaded {:.2f} MiB in {:.0f} uploads, "
                      "range cache {:.0f} hits / {:.0f} misses, pointer cache {:.0f} hits / "
-                     "{:.0f} misses",
+                     "{:.0f} misses{}",
                      thread_name, static_cast<double>(dispatches) * 1e9 / window,
                      rate(Counter::ComputeStorageBytes) / MiB,
                      rate(Counter::ComputeStorageBindings), rate(Counter::ComputeSyncBytes) / MiB,
                      rate(Counter::ComputeSyncUploads), rate(Counter::RangeCacheHits),
                      rate(Counter::RangeCacheMisses), rate(Counter::StorageBindingHits),
-                     rate(Counter::StorageBindingMisses));
+                     rate(Counter::StorageBindingMisses), dirty_walk);
         }
     }
     if (!t_compute_programs.empty()) {
