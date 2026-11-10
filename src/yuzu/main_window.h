@@ -186,6 +186,11 @@ public:
 
     std::filesystem::path GetShortcutPath(QtCommon::Game::ShortcutTarget target);
 
+    /// What NVIDIA DLSS ran as since the last status bar update, empty when it didn't run
+    [[nodiscard]] const QString& DlssStatusText() const {
+        return dlss_status_text;
+    }
+
 signals:
 
     /**
@@ -577,6 +582,7 @@ private:
     QLabel* res_scale_label = nullptr;
     QLabel* emu_speed_label = nullptr;
     QLabel* game_fps_label = nullptr;
+    QLabel* dlss_status_label = nullptr;
     QLabel* emu_frametime_label = nullptr;
     QLabel* tas_label = nullptr;
     QLabel* firmware_label = nullptr;
@@ -588,6 +594,8 @@ private:
     QPushButton* filter_status_button = nullptr;
     QPushButton* aa_status_button = nullptr;
     QPushButton* post_shader_status_button = nullptr;
+    u64 dlss_evaluations = 0;
+    QString dlss_status_text;
     VolumeButton* volume_button = nullptr;
     QWidget* volume_popup = nullptr;
     QSlider* volume_slider = nullptr;

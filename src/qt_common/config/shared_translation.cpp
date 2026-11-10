@@ -166,6 +166,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "EDEN_NX2_DLSS_REPLACEMENT=dlss. Without that override, its spatial workaround "
               "remains active.\nIn The Legend of Zelda: Ocarina of Time it replaces the game's "
               "upscaler at 1x resolution scale.\nTakes effect when a game starts."));
+    INSERT(Settings, nvidia_dlss_quality, tr("DLSS quality:"),
+           tr("Automatic picks the mode from the game's own resolution. Native (DLAA) keeps the "
+              "game's resolution and only smooths it. Other modes apply when they fit the game's "
+              "resolution, otherwise Automatic is used. Changes apply while playing."));
     INSERT(Settings, anti_aliasing, tr("Anti-Aliasing Method:"),
            tr("The anti-aliasing method to use.\nSMAA offers the best quality.\nFXAA "
               "can produce a more stable picture in lower resolutions."));
@@ -464,6 +468,13 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                               PAIR(SpirvOptimizeMode, OnLoad, tr("On Load")),
                               PAIR(SpirvOptimizeMode, Always, tr("Always")),
                           }});
+    translations->insert({Settings::EnumMetadata<Settings::NvidiaDlssQuality>::Index(),
+                          {PAIR(NvidiaDlssQuality, Automatic, tr("Automatic")),
+                           PAIR(NvidiaDlssQuality, Native, tr("Native (DLAA)")),
+                           PAIR(NvidiaDlssQuality, Quality, tr("Quality")),
+                           PAIR(NvidiaDlssQuality, Balanced, tr("Balanced")),
+                           PAIR(NvidiaDlssQuality, Performance, tr("Performance")),
+                           PAIR(NvidiaDlssQuality, UltraPerformance, tr("Ultra Performance"))}});
     translations->insert({Settings::EnumMetadata<Settings::AstcDecodeMode>::Index(),
                           {
                               PAIR(AstcDecodeMode, Cpu, tr("CPU")),
