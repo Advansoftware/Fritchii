@@ -47,6 +47,8 @@ add_library(
     dkb_cpu_trace.h
     jit_symbols.cpp
     jit_symbols.h
+    nx2_hitch.cpp
+    nx2_hitch.h
     nx2_sampler.cpp
     nx2_sampler.h
     nx2_gpu_write_listener.h

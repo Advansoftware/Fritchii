@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include "common/nx2_hitch.h"
 #include "common/nx2_timeline.h"
 #include <array>
 #include <thread>
@@ -1906,6 +1907,7 @@ private:
                 m_stats.frame_us += frame;
                 m_stats.max_frame_us = (std::max)(m_stats.max_frame_us, frame);
                 m_stats.hitches += frame > 100'000 ? 1 : 0;
+                Common::Nx2Hitch::OnPresent(frame);
             }
             m_stats.last_present = entered;
             if (++m_stats.presents == 600) {
