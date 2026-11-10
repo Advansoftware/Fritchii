@@ -305,7 +305,20 @@ private:
     /// Persistent targets listed so far (32 at most per session).
     mutable std::unordered_set<GPUVAddr> listed_persistent_targets;
 
-    std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline();
+    /// With `keep_pointers`, the slots an evicted pipeline of this key bound stay storage buffer
+    /// pointers whatever they hold now (from zortos293/Lichii#1143).
+    std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
+        const VideoCommon::EvictedPointerSlots::Slots* keep_pointers = nullptr);
+
+    /// The pointer slots kept for the current key (evicted_pointer_slots), null when none
+    [[nodiscard]] const VideoCommon::EvictedPointerSlots::Slots* KeptPointers() const;
+    /// Answers the kept slots of each program as storage buffer pointers (KeepStoragePointers)
+    static void KeepPointers(std::span<VideoCommon::GraphicsEnvironment> envs,
+                             const GraphicsPipelineCacheKey& key,
+                             const VideoCommon::EvictedPointerSlots::Slots* keep_pointers);
+    /// Logs a kept pointer slot (an index of keep_pointers) that this translation would otherwise
+    /// have classified as no pointer: null, unmapped, or out of range right now.
+    void WarnKeptPointer(size_t program, u64 slot) const;
 
     /// Stores a graphics pipeline built at run time in the disk cache (unless it is there and
     /// loads), with the environments it was translated from. GPU thread.
@@ -315,8 +328,8 @@ private:
 
     /// EDEN_NX2_ASYNC_TRANSLATE=1/2 (translate_queue set). Queues the current key's translation
     /// from snapshot environments when the draw may be skipped; false when it is to be built on
-    /// the GPU thread instead.
-    bool EnqueueTranslation();
+    /// the GPU thread instead. `keep_pointers` as CreateGraphicsPipeline's.
+    bool EnqueueTranslation(const VideoCommon::EvictedPointerSlots::Slots* keep_pointers = nullptr);
     /// A later lookup of a key whose entry is empty: its translated pipeline when ready; `pending`
     /// when the draw is to be skipped meanwhile. Waits (capped) or builds here for a draw that
     /// must not be skipped.
@@ -343,7 +356,10 @@ private:
     /// (FileEnvironment::AnswersHoldFor): created on the GPU thread without translating, built on
     /// a worker from the kept SPIR-V, stored in the disk cache like a translated one. Null when
     /// the key is not precompiled or a check differs: the draw takes the normal path then.
-    std::unique_ptr<GraphicsPipeline> CreatePrecompiledGraphicsPipeline();
+    /// `keep_pointers` (an evicted key's) are answered as pointers before the check, as a
+    /// translation would see them.
+    std::unique_ptr<GraphicsPipeline> CreatePrecompiledGraphicsPipeline(
+        const VideoCommon::EvictedPointerSlots::Slots* keep_pointers = nullptr);
     /// The compute counterpart: the first of the key's records (one per storage pointer state it
     /// was prepared in) whose answers hold for `env`. An entry without a pipeline otherwise.
     ComputePipelineCacheEntry CreatePrecompiledComputePipeline(const ComputePipelineCacheKey& key,
@@ -566,6 +582,9 @@ private:
     std::deque<std::pair<u64, std::unique_ptr<GraphicsPipeline>>> retired_translations; ///< (tick, pipeline)
     void RetireTranslatedPipeline(std::unique_ptr<GraphicsPipeline> pipeline);
     std::unordered_set<u64> used_and_evicted; ///< Key hashes of pipelines used this session, evicted since
+    /// The pointer slots of evicted graphics pipelines, for their next translation (from
+    /// zortos293/Lichii#1143). Forgotten once a pipeline of the key is made again.
+    VideoCommon::EvictedPointerSlots evicted_pointer_slots;
 
     ::Common::unordered_map<ComputePipelineCacheKey, ComputePipelineCacheEntry> compute_cache;
     /// Replaced compute pipelines, destroyed once the GPU and their queued build are done with

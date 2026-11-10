@@ -99,6 +99,7 @@ add_executable(tests
     video_core/ampere_tennis_i2f.cpp
     video_core/ampere_tennis_tessellation.cpp
     video_core/pipeline_cache_files.cpp
+    video_core/evicted_pointer_slots.cpp
     video_core/shader_object_pool.cpp
     video_core/storage_binding_capacity.cpp
     video_core/native_indirect_reset.cpp
