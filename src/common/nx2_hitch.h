@@ -10,33 +10,40 @@
 #include "common/common_types.h"
 
 // Hitch attribution (2026-11-10, the owner's v5.6 playtest: 0.4-1 s frames with 0 pipelines built,
-// the cause unclear from 10-second totals). Every place that can hold the game up adds its time
-// here; the game's present (nx2:vi2) calls OnPresent with the gap since the previous present, and
-// a gap over 50 ms logs one line with its exact time and what each cause took inside it.
-// EDEN_NX2_HITCH_LOG=0 turns the line off (the counters stay, they are a few relaxed adds).
+// the cause unclear from 10-second totals; design fable52_answer_11/12). Every place that can hold
+// the game up adds its time here; the game's present (nx2:vi2) calls OnPresent with the gap since
+// the previous present, and a gap over 50 ms logs one line with its exact time, what each cause
+// took inside it, page faults, memory the kernel zero-filled, and the CPU time of the busiest
+// threads. EDEN_NX2_HITCH_LOG=0 turns the line off (the counters stay, a few relaxed adds).
 namespace Common::Nx2Hitch {
 
 enum class Cause : u8 {
-    FullDrain,    ///< fence releases: the front waited until the back and the host GPU were idle
-    ReadBack,     ///< guest reads of GPU-written memory (download + wait), any thread
-    SaveData,     ///< save data writes, flushes and commits (fsp)
-    MemorySample, ///< working-set walks for the memory lines (GPU thread, memory probe)
-    ZeroTrim,     ///< zero-page passes that ended in the gap (their own thread)
-    FileThrottle, ///< IStorage::Read's sleep under 40 MB/s (game files, the one FS thread)
-    FileRead,     ///< IStorage::Read's read itself
-    HostMemory,   ///< host Map/Unmap/Protect of guest memory (placeholder lock included)
-    Recompile,    ///< the CPU recompiler compiling game code it hasn't seen (dynarmic GetBlock)
+    FullDrain,       ///< fence releases: the front waited until the back and the host GPU were idle
+    ReadBack,        ///< guest reads of GPU-written memory (download + wait), any thread
+    SaveData,        ///< save data writes and flushes (fsp)
+    MemorySample,    ///< working-set walks for the memory lines (memory probe thread)
+    ZeroTrim,        ///< zero-page passes that ended in the gap (their own thread)
+    FileThrottle,    ///< IStorage::Read's sleep under 40 MB/s (game files, the one FS thread)
+    FileRead,        ///< IStorage::Read's read itself
+    HostMap,         ///< host Map of guest memory (placeholder lock included), amount = bytes
+    HostUnmap,       ///< host Unmap, amount = bytes
+    HostProtect,     ///< host Protect, amount = bytes
+    Recompile,       ///< a CPU core's recompiler compiling game code no core had compiled
+    RecompileRepeat, ///< the same, for code another core had compiled already (4 separate JITs)
     Count,
 };
 
 /// Names in the hitch line, in Cause order.
-inline constexpr std::array<const char*, 10> CauseNames{
-    "full drains", "read-backs",  "save data",  "memory walks", "zero-page passes",
-    "file read throttle", "file reads", "host map/protect", "recompiling game code", "?"};
+inline constexpr std::array<const char*, static_cast<size_t>(Cause::Count)> CauseNames{
+    "full drains",        "read-backs", "save data", "memory walks", "zero-page passes",
+    "file read throttle", "file reads", "host map",  "host unmap",   "host protect",
+    "recompiling new game code (summed over cores)",
+    "recompiling code another core had (summed over cores)"};
 
 struct Counters {
     std::array<std::atomic<u64>, static_cast<size_t>(Cause::Count)> ns{};
     std::array<std::atomic<u64>, static_cast<size_t>(Cause::Count)> count{};
+    std::array<std::atomic<u64>, static_cast<size_t>(Cause::Count)> amount{};
     /// The longest single one since the last present (reset there)
     std::array<std::atomic<u64>, static_cast<size_t>(Cause::Count)> longest{};
     /// steady_clock ns when the running zero-page pass began, 0 while none runs
@@ -51,10 +58,13 @@ inline Counters g_counters;
                                 .count());
 }
 
-inline void Add(Cause cause, u64 ns) {
+inline void Add(Cause cause, u64 ns, u64 amount = 0) {
     const auto i = static_cast<size_t>(cause);
     g_counters.ns[i].fetch_add(ns, std::memory_order_relaxed);
     g_counters.count[i].fetch_add(1, std::memory_order_relaxed);
+    if (amount != 0) {
+        g_counters.amount[i].fetch_add(amount, std::memory_order_relaxed);
+    }
     u64 longest = g_counters.longest[i].load(std::memory_order_relaxed);
     while (ns > longest &&
            !g_counters.longest[i].compare_exchange_weak(longest, ns, std::memory_order_relaxed)) {
@@ -64,15 +74,17 @@ inline void Add(Cause cause, u64 ns) {
 /// Times its scope as `cause`.
 class Scope {
 public:
-    explicit Scope(Cause cause_) : cause{cause_}, begin{NowNs()} {}
+    explicit Scope(Cause cause_, u64 amount_ = 0)
+        : cause{cause_}, amount{amount_}, begin{NowNs()} {}
     ~Scope() {
-        Add(cause, NowNs() - begin);
+        Add(cause, NowNs() - begin, amount);
     }
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
 
 private:
     Cause cause;
+    u64 amount;
     u64 begin;
 };
 
@@ -87,7 +99,12 @@ inline void ZeroTrimEnd() {
     }
 }
 
-static_assert(CauseNames.size() == static_cast<size_t>(Cause::Count) + 1);
+/// From a CPU core's recompiler before it compiles block `key` (its LocationDescriptor value):
+/// whether another core compiled the same key already (process-wide, never forgets).
+[[nodiscard]] bool NoteCompiled(u64 key, u32 core);
+
+/// From Common::SetCurrentThreadName: the thread's CPU time goes in the hitch line under `name`.
+void RegisterThread(const char* name);
 
 /// From the game's present, one thread: `gap_us` since its previous present.
 void OnPresent(long long gap_us);

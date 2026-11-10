@@ -246,7 +246,11 @@ private:
         if (auto block = emitter.GetBasicBlock(descriptor))
             return block->entrypoint;
         // Fritchii hitch attribution (2026-11-10): new game code compiled while the game waits.
-        const ::Common::Nx2Hitch::Scope hitch_timed{::Common::Nx2Hitch::Cause::Recompile};
+        // Each emulated core has its own JIT (fable52_answer_12): count code another core has.
+        const ::Common::Nx2Hitch::Scope hitch_timed{
+            ::Common::Nx2Hitch::NoteCompiled(descriptor.Value(), conf.processor_id)
+                ? ::Common::Nx2Hitch::Cause::RecompileRepeat
+                : ::Common::Nx2Hitch::Cause::Recompile};
 
         constexpr size_t MINIMUM_REMAINING_CODESIZE = 1 * 1024 * 1024;
         if (block_of_code.SpaceRemaining() < MINIMUM_REMAINING_CODESIZE) {
