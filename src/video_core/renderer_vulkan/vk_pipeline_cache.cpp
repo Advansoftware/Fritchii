@@ -555,6 +555,17 @@ size_t GetTotalPipelineWorkers() {
 #endif
 }
 
+/// How many of a program's storage descriptors have a proven read extent
+/// (Shader::Info::storage_read_extents). Nothing uses them yet: the preparation counts them.
+u32 ProvenReadExtents(const Shader::Info& info) {
+    if (info.storage_read_extents.size() != info.storage_buffers_descriptors.size()) {
+        return 0;
+    }
+    return static_cast<u32>(
+        std::ranges::count_if(info.storage_read_extents,
+                              [](const Shader::StorageWriteExtent& extent) { return extent.bounded; }));
+}
+
 } // Anonymous namespace
 
 size_t ComputePipelineCacheKey::Hash() const noexcept {
@@ -4267,6 +4278,15 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
         std::array<std::atomic<size_t>, 16> other_device_by{};
         std::atomic<size_t> known{};     ///< graphics keys the disk cache holds
         std::atomic<size_t> finished{};
+        /// Read extents of the kept translations (Shader::Info::storage_read_extents): storage
+        /// descriptors and those proven, compute programs with storage descriptors and those
+        /// proven in full.
+        std::atomic<size_t> compute_storage{};
+        std::atomic<size_t> compute_storage_proven{};
+        std::atomic<size_t> compute_programs{};
+        std::atomic<size_t> compute_programs_proven{};
+        std::atomic<size_t> graphics_storage{};
+        std::atomic<size_t> graphics_storage_proven{};
         size_t low_water{};              ///< first record not finished yet (under mutex)
         size_t checkpoint{};
         std::vector<u8> done;
@@ -4445,6 +4465,14 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
                             infos[0] = std::move(kept.info);
                             spirv[0] = std::move(kept.spirv);
                             writer.Keep(index, 1, 0, compute_key.Hash(), env_ids, infos, spirv);
+                            if (kept.storage_descriptors != 0) {
+                                state.compute_storage += kept.storage_descriptors;
+                                state.compute_storage_proven += kept.proven_read_extents;
+                                ++state.compute_programs;
+                                if (kept.proven_read_extents == kept.storage_descriptors) {
+                                    ++state.compute_programs_proven;
+                                }
+                            }
                         }
                     } else {
                         boost::container::static_vector<Shader::Environment*,
@@ -4469,6 +4497,8 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
                             writer.Keep(index, 0,
                                         kept.libraries ? PrecompiledKept::FlagLibraries : u8{0},
                                         record_key.Hash(), env_ids, kept.infos, kept.spirv);
+                            state.graphics_storage += kept.storage_descriptors;
+                            state.graphics_storage_proven += kept.proven_read_extents;
                         }
                     }
                 }
@@ -4552,6 +4582,13 @@ void PipelineCache::PreparePrecompiled(const std::filesystem::path& base_dir,
                      "infos, {} distinct stages of SPIR-V ({} MiB compressed), {} MiB in all",
                      totals.records, totals.infos, totals.spirv, totals.spirv_bytes >> 20,
                      totals.file_bytes >> 20);
+            // Recorded, not used yet: what a sync limited to the reads could cover.
+            LOG_INFO(Render_Vulkan,
+                     "Read extents: {} of {} compute storage descriptors proven ({} of {} "
+                     "programs fully), {} of {} graphics, in the pipelines kept by this run",
+                     state.compute_storage_proven.load(), state.compute_storage.load(),
+                     state.compute_programs_proven.load(), state.compute_programs.load(),
+                     state.graphics_storage_proven.load(), state.graphics_storage.load());
         } else {
             LOG_WARNING(Render_Vulkan, "Precompiled pipelines: writing {} failed",
                         kept_part.filename().string());
@@ -6574,6 +6611,9 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                 record->infos[stage_index].clear();
                 Shader::SerializeInfo(program.info, record->infos[stage_index]);
                 record->libraries = use_libraries;
+                record->storage_descriptors +=
+                    static_cast<u32>(program.info.storage_buffers_descriptors.size());
+                record->proven_read_extents += ProvenReadExtents(program.info);
             }
             if (record->translate_only) {
                 previous_stage = &program;
@@ -7399,6 +7439,9 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
         keep->spirv = code;
         keep->info.clear();
         Shader::SerializeInfo(program.info, keep->info);
+        keep->storage_descriptors =
+            static_cast<u32>(program.info.storage_buffers_descriptors.size());
+        keep->proven_read_extents = ProvenReadExtents(program.info);
         if (keep->translate_only) {
             return {};
         }

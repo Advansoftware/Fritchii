@@ -441,6 +441,9 @@ private:
         std::vector<u32> spirv;
         std::vector<u8> info;
         bool translate_only{};
+        /// The program's storage descriptors, and how many have a proven read extent
+        u32 storage_descriptors{};
+        u32 proven_read_extents{};
     };
 
     ComputePipelineCacheEntry CreateComputePipeline(ShaderPools& pools,
