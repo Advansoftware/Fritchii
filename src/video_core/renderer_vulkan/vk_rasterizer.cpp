@@ -2078,6 +2078,8 @@ void RasterizerVulkan::DispatchCompute() {
     }
 
     ComputePipeline* const pipeline{[&] {
+        const VideoCommon::Nx2Profile::Scope lookup_scope{
+            VideoCommon::Nx2Profile::Zone::ComputeLookup};
         try {
             return pipeline_cache.CurrentComputePipeline();
         } catch (const Shader::Exception& error) {
@@ -2103,6 +2105,7 @@ void RasterizerVulkan::DispatchCompute() {
         }
         return;
     }
+    VideoCommon::Nx2Profile::CountComputeProgram(pipeline->ShaderHash());
     std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
     std::optional<ByteAddressedShadow> byte_addressed_shadow;
     buffer_cache.Nx2CollectListCopies(true);

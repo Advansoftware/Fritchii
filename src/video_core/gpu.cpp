@@ -42,6 +42,7 @@
 #include "video_core/nx2.h"
 #include "video_core/nx2_async_readback.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/nx2_profile.h"
 #include "video_core/renderer_base.h"
 #include "video_core/shader_notify.h"
 
@@ -328,6 +329,9 @@ struct GPU::Impl {
         const bool async = VideoCore::Nx2Debug::Experiment(49) != 0;
         if (!async || !raster_area.in_flight) {
             const u64 fence = RequestSyncOperation([this, raster_area, area_size, async]() {
+                // Its own zone: it runs in whatever zone TickWork runs in (a draw's, mostly).
+                const VideoCommon::Nx2Profile::Scope read_scope{
+                    VideoCommon::Nx2Profile::Zone::ReadFlush};
                 const u64 start = AsyncReadback::Now();
                 // Apply collected guest writes before downloading GPU data over guest memory.
                 InvalidateGPUCache();
@@ -363,6 +367,8 @@ struct GPU::Impl {
             VideoCore::RasterizerInterface* rasterizer = renderer->ReadRasterizer();
             if (!rasterizer->TryCacheInvalidation(addr, size)) {
                 const u64 fence = RequestSyncOperation([rasterizer, addr, size] {
+                    const VideoCommon::Nx2Profile::Scope read_scope{
+                        VideoCommon::Nx2Profile::Zone::ReadFlush};
                     rasterizer->FlushRegion(addr, size, VideoCommon::CacheType::BufferCache);
                     rasterizer->OnCacheInvalidation(addr, size);
                 });
@@ -561,6 +567,7 @@ void GPU::OnCommandListEnd() {
 
 u64 GPU::RequestFlush(DAddr addr, std::size_t size) {
     return impl->RequestSyncOperation([this, addr, size]() {
+        const VideoCommon::Nx2Profile::Scope read_scope{VideoCommon::Nx2Profile::Zone::ReadFlush};
         impl->renderer->ReadRasterizer()->FlushRegion(addr, size);
     });
 }

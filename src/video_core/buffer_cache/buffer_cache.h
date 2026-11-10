@@ -1350,7 +1350,7 @@ void BufferCache<P>::BindComputeStorageBuffer(size_t ssbo_index, u32 cbuf_index,
         table_pointer && holder == 0
             ? NULL_BINDING
             : StorageBufferBinding(ssbo_addr, cbuf_index, is_written, native_pointer,
-                                   table_pointer);
+                                   table_pointer, true);
     channel_state->compute_storage_buffers[ssbo_index] = binding;
     if (table_pointer && holder != 0) {
         TraceTablePointer(true, 0, ssbo_index, cbuf_index, cbuf_offset, indirect_offset, holder,
@@ -2269,8 +2269,16 @@ void BufferCache<P>::ResolveMultiRangeStorage(Binding& binding, bool is_written,
         if (is_written && !runtime.PrefersSparseSources()) {
             return;
         }
-        const VirtualSegments* found =
-            virtual_ranges.Query(*gpu_memory, binding.gpu_addr, binding.size);
+        // Counted for compute bindings only (the compute bindings line).
+        const bool count = Nx2Profile::Enabled() && &pool == &compute_segments;
+        bool hit = false;
+        const VirtualSegments* found = virtual_ranges.Query(*gpu_memory, binding.gpu_addr,
+                                                            binding.size, count ? &hit : nullptr);
+        if (count) {
+            Nx2Profile::Add(hit ? Nx2Profile::Counter::RangeCacheHits
+                                : Nx2Profile::Counter::RangeCacheMisses,
+                            1);
+        }
         if (!found || found->size() < 2) {
             return;
         }
@@ -2658,8 +2666,18 @@ void BufferCache<P>::BindHostComputeUniformBuffers() {
 template <class P>
 void BufferCache<P>::BindHostComputeStorageBuffers() {
     u32 binding_index = 0;
+    // EDEN_NX2_GPU_PROFILE: bytes bound against bytes uploaded (the compute bindings line).
+    const bool profile = Nx2Profile::Enabled();
+    count_compute_sync = profile;
+    SCOPE_EXIT {
+        count_compute_sync = false;
+    };
     ForEachEnabledBit(channel_state->enabled_compute_storage_buffers, [&](u32 index) {
         const Binding& binding = channel_state->compute_storage_buffers[index];
+        if (profile) {
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeStorageBindings, 1);
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeStorageBytes, binding.size);
+        }
         const bool is_written =
             ((channel_state->written_compute_storage_buffers >> index) & 1) != 0;
         // A native program's binding is min(layout, 8 MiB) because its pointer has no size, and
@@ -3843,6 +3861,10 @@ bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 si
         if (total_size_bytes == 0) {
             return true;
         }
+        if (count_compute_sync) [[unlikely]] {
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncUploads, 1);
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncBytes, total_size_bytes);
+        }
         const std::span<BufferCopy> copies_span(upload_copies.data(), upload_copies.size());
         UploadMemory(buffer, total_size_bytes, largest_copy, copies_span);
         // Mapped uploads carry their own barriers (or run in the upload command buffer, which
@@ -3868,6 +3890,10 @@ bool BufferCache<P>::SynchronizeBuffer(Buffer& buffer, DAddr device_addr, u32 si
         });
         if (total_size_bytes == 0) {
             return true;
+        }
+        if (count_compute_sync) [[unlikely]] {
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncUploads, 1);
+            Nx2Profile::Add(Nx2Profile::Counter::ComputeSyncBytes, total_size_bytes);
         }
         const std::span<BufferCopy> copies_span(copies.data(), copies.size());
         UploadMemory(buffer, total_size_bytes, largest_copy, copies_span);
@@ -4286,7 +4312,8 @@ void BufferCache<P>::TraceTablePointer(bool compute, size_t stage, size_t ssbo_i
 
 template <class P>
 Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index, bool is_written,
-                                             bool native_pointer, bool table_pointer) const {
+                                             bool native_pointer, bool table_pointer,
+                                             bool compute) const {
     const GPUVAddr gpu_addr = gpu_memory->Read<u64>(ssbo_addr);
 
     if (gpu_addr == 0) {
@@ -4320,8 +4347,14 @@ Binding BufferCache<P>::StorageBufferBinding(GPUVAddr ssbo_addr, u32 cbuf_index,
             cached.next_qword == next_qword && cached.flags == flags && cached.serial == serial) {
             const Binding hit = cached.binding;
             std::rotate(set.begin(), set.begin() + way, set.begin() + way + 1);
+            if (compute) {
+                Nx2Profile::Add(Nx2Profile::Counter::StorageBindingHits, 1);
+            }
             return hit;
         }
+    }
+    if (compute) {
+        Nx2Profile::Add(Nx2Profile::Counter::StorageBindingMisses, 1);
     }
     const Binding binding = [&]() -> Binding {
         u32 size = [&]() {
