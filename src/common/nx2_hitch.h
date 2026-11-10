@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <vector>
 
 #include "common/common_types.h"
 
@@ -29,7 +30,8 @@ enum class Cause : u8 {
     HostUnmap,       ///< host Unmap, amount = bytes
     HostProtect,     ///< host Protect, amount = bytes
     Recompile,       ///< a CPU core's recompiler compiling game code no core had compiled
-    RecompileRepeat, ///< the same, for code another core had compiled already (4 separate JITs)
+    RecompileRepeat, ///< the same, for code another core had compiled already (separate JITs)
+    WarmCompile,     ///< EDEN_NX2_JIT_WARM: idle cores compiling what another core compiled
     Count,
 };
 
@@ -38,7 +40,8 @@ inline constexpr std::array<const char*, static_cast<size_t>(Cause::Count)> Caus
     "full drains",        "read-backs", "save data", "memory walks", "zero-page passes",
     "file read throttle", "file reads", "host map",  "host unmap",   "host protect",
     "recompiling new game code (summed over cores)",
-    "recompiling code another core had (summed over cores)"};
+    "recompiling code another core had (summed over cores)",
+    "warm compiles on idle cores"};
 
 struct Counters {
     std::array<std::atomic<u64>, static_cast<size_t>(Cause::Count)> ns{};
@@ -99,9 +102,20 @@ inline void ZeroTrimEnd() {
     }
 }
 
+/// Set on a CPU core's thread while it warm-compiles (PhysicalCore::Idle).
+inline thread_local bool t_warming{};
+
 /// From a CPU core's recompiler before it compiles block `key` (its LocationDescriptor value):
-/// whether another core compiled the same key already (process-wide, never forgets).
-[[nodiscard]] bool NoteCompiled(u64 key, u32 core);
+/// the cause to time it as (new code, code another core compiled, a warm compile). Process-wide
+/// key -> core mask, never forgets. With EDEN_NX2_JIT_WARM=1, an on-demand compile also queues
+/// the key for every other core that hasn't compiled it (fable52_answer_12).
+[[nodiscard]] Cause CompileCause(u64 key, u32 core);
+
+/// EDEN_NX2_JIT_WARM=1 (boot): idle cores compile what other cores compiled. Off by default.
+[[nodiscard]] bool JitWarmEnabled();
+
+/// Moves up to `max` queued keys for `core` into `out` (cleared first); returns how many.
+size_t TakeWarmKeys(u32 core, std::vector<u64>& out, size_t max);
 
 /// From Common::SetCurrentThreadName: the thread's CPU time goes in the hitch line under `name`.
 void RegisterThread(const char* name);

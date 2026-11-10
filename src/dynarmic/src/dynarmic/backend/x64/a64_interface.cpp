@@ -238,6 +238,24 @@ private:
         return GetBlock(GetCurrentLocation());
     }
 
+public:
+    bool PrecompileBlock(u64 location) {
+        if (is_executing) {
+            return false;
+        }
+        const IR::LocationDescriptor descriptor{location};
+        if (emitter.GetBasicBlock(descriptor)) {
+            return false;
+        }
+        if (block_of_code.SpaceRemaining() < (size_t{256} << 20)) {
+            return false;
+        }
+        static_cast<void>(GetBlock(descriptor));
+        return true;
+    }
+
+private:
+
     CodePtr GetCurrentSingleStep() {
         return GetBlock(A64::LocationDescriptor{GetCurrentLocation()}.SetSingleStepping(true));
     }
@@ -248,9 +266,7 @@ private:
         // Fritchii hitch attribution (2026-11-10): new game code compiled while the game waits.
         // Each emulated core has its own JIT (fable52_answer_12): count code another core has.
         const ::Common::Nx2Hitch::Scope hitch_timed{
-            ::Common::Nx2Hitch::NoteCompiled(descriptor.Value(), conf.processor_id)
-                ? ::Common::Nx2Hitch::Cause::RecompileRepeat
-                : ::Common::Nx2Hitch::Cause::Recompile};
+            ::Common::Nx2Hitch::CompileCause(descriptor.Value(), conf.processor_id)};
 
         constexpr size_t MINIMUM_REMAINING_CODESIZE = 1 * 1024 * 1024;
         if (block_of_code.SpaceRemaining() < MINIMUM_REMAINING_CODESIZE) {
@@ -319,6 +335,10 @@ HaltReason Jit::Step() {
 
 void Jit::ClearCache() {
     impl->ClearCache();
+}
+
+bool Jit::PrecompileBlock(u64 location) {
+    return impl->PrecompileBlock(location);
 }
 
 void Jit::InvalidateCacheRange(u64 start_address, size_t length) {

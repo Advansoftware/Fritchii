@@ -13,6 +13,7 @@
 #elif defined(__aarch64__)
 #define NX2_IDLE_HAS_PAUSE 1
 #endif
+#include "common/nx2_hitch.h"
 #include "common/nx2_timeline.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -325,6 +326,21 @@ void PhysicalCore::LogBacktrace(KernelCore& kernel) {
 
 void PhysicalCore::Idle(KernelCore& kernel) {
     Common::Nx2Timeline::Span timeline_span{"guest core idle"};
+    // EDEN_NX2_JIT_WARM=1: each emulated core has its own JIT, so code one core compiled is
+    // compiled again by every other core the first time it runs it there (bursts of 60-180 ms
+    // frames after area loads, 2026-11-10). An idle core compiles that code now, a few blocks at
+    // a time, checking for an interrupt between blocks (fable52_answer_12).
+    if (Common::Nx2Hitch::JitWarmEnabled() && !m_is_interrupted.load(std::memory_order_acquire)) {
+        if (KProcess* const process = kernel.ApplicationProcess()) {
+            if (auto* const arm = process->GetArmInterface(m_core_index)) {
+                thread_local std::vector<u64> keys;
+                while (!m_is_interrupted.load(std::memory_order_acquire) &&
+                       Common::Nx2Hitch::TakeWarmKeys(static_cast<u32>(m_core_index), keys, 16) != 0) {
+                    static_cast<void>(arm->WarmCompile(keys, m_is_interrupted));
+                }
+            }
+        }
+    }
     // Guest job systems hand work between cores many times per frame; blocking at once adds the
     // host's thread wake-up latency to every handoff. EDEN_NX2_IDLE_SPIN_US=<n>: poll for that
     // many microseconds before blocking. Switch 2 titles poll 100 us by default outside Android

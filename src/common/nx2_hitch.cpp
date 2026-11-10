@@ -134,15 +134,59 @@ std::string BusiestThreads(const Snapshot& last, const Snapshot& now) {
 
 } // Anonymous namespace
 
-bool NoteCompiled(u64 key, u32 core) {
-    static std::mutex mutex;
-    static std::unordered_map<u64, u8> cores;
+namespace {
+std::mutex g_compile_mutex;
+std::unordered_map<u64, u8> g_compiled_on; ///< key -> mask of the cores that compiled it
+u8 g_cores_seen{};
+std::array<std::vector<u64>, 8> g_warm_queues;
+} // Anonymous namespace
+
+bool JitWarmEnabled() {
+    static const bool enabled = [] {
+        const char* const value = std::getenv("EDEN_NX2_JIT_WARM");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
+Cause CompileCause(u64 key, u32 core) {
     const u8 bit = static_cast<u8>(1U << (core & 7));
-    std::scoped_lock lock{mutex};
-    u8& mask = cores[key];
+    std::scoped_lock lock{g_compile_mutex};
+    g_cores_seen |= bit;
+    u8& mask = g_compiled_on[key];
     const bool repeat = (mask & ~bit) != 0;
     mask |= bit;
-    return repeat;
+    if (t_warming) {
+        return Cause::WarmCompile;
+    }
+    // Single-stepping blocks (bit 57 of an A64 LocationDescriptor) are never worth warming.
+    if (JitWarmEnabled() && ((key >> 57) & 1) == 0) {
+        for (u32 other = 0; other < 8; ++other) {
+            const u8 other_bit = static_cast<u8>(1U << other);
+            if ((g_cores_seen & other_bit) != 0 && (mask & other_bit) == 0 &&
+                g_warm_queues[other].size() < 400'000) {
+                g_warm_queues[other].push_back(key);
+            }
+        }
+    }
+    return repeat ? Cause::RecompileRepeat : Cause::Recompile;
+}
+
+size_t TakeWarmKeys(u32 core, std::vector<u64>& out, size_t max) {
+    out.clear();
+    std::scoped_lock lock{g_compile_mutex};
+    auto& queue = g_warm_queues[core & 7];
+    const u8 bit = static_cast<u8>(1U << (core & 7));
+    // Oldest first; skip keys this core compiled on demand meanwhile.
+    size_t taken = 0;
+    while (taken < queue.size() && out.size() < max) {
+        const u64 key = queue[taken++];
+        if ((g_compiled_on[key] & bit) == 0) {
+            out.push_back(key);
+        }
+    }
+    queue.erase(queue.begin(), queue.begin() + static_cast<std::ptrdiff_t>(taken));
+    return out.size();
 }
 
 void RegisterThread(const char* name) {
