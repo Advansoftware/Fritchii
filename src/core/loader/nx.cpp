@@ -936,6 +936,13 @@ ResultStatus AppLoader_NX::ReadIcon(std::vector<u8>& buffer) {
     return ResultStatus::Success;
 }
 
+ResultStatus AppLoader_NX::ReadOriginalIcon(u64 application_id, std::vector<u8>& buffer) const {
+    if (impl->native == nullptr || impl->Archive().applications()[impl->app].id != application_id) {
+        return ResultStatus::ErrorNoIcon;
+    }
+    return impl->native->ReadOriginalIcon(buffer);
+}
+
 ResultStatus AppLoader_NX::ReadTitle(std::string& title) {
     if (impl->status != ResultStatus::Success) {
         return impl->status;
@@ -950,6 +957,14 @@ ResultStatus AppLoader_NX::ReadTitle(std::string& title) {
     }
     title = a.title(impl->app);
     return title.empty() ? ResultStatus::ErrorNoControl : ResultStatus::Success;
+}
+
+ResultStatus AppLoader_NX::ReadPublisher(std::string& publisher) const {
+    if (impl->app == Absent) {
+        return ResultStatus::ErrorNoControl;
+    }
+    publisher = impl->Archive().publisher(impl->app);
+    return ResultStatus::Success;
 }
 
 ResultStatus AppLoader_NX::ReadControlData(FileSys::NACP& control) {

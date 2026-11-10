@@ -472,6 +472,7 @@ private slots:
 
 private:
     void OnGameListNxTool(const std::string& game_path, void (NxTools::*tool)(const std::string&));
+    void OnGameListEditNxMetadata(const std::string& game_path);
     void RemovePlayTimeData(u64 program_id);
     bool SelectRomFSDumpTarget(const FileSys::ContentProvider&, u64 program_id,
                                u64* selected_title_id, u8* selected_content_record_type);
@@ -642,6 +643,7 @@ private:
     QAction* action_prepare_shaders_now = nullptr;
     QPointer<QProgressDialog> shader_warm_run_dialog;
     NxTools* nx_tools = nullptr;
+    bool nx_metadata_write_in_progress = false;
     std::string nup_source_path;
 
     // Last game booted, used for multi-process apps

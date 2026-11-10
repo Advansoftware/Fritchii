@@ -47,6 +47,7 @@
 #include "yuzu/nup_dialogs.h"
 #include "yuzu/shader_warm_dialog.h"
 #ifdef LICHII_NX_TOOLS
+#include "core/file_sys/registered_cache.h"
 #include "yuzu/nx_tools.h"
 #endif
 
@@ -1655,6 +1656,14 @@ void MainWindow::ConnectWidgetEvents() {
     nx_tools = new NxTools(QtCommon::vfs, this);
     connect(nx_tools, &NxTools::RunningChanged, game_list, &GameList::SetNxToolRunning);
     connect(nx_tools, &NxTools::ArchivesChanged, this, &MainWindow::OnGameListRefresh);
+    connect(nx_tools, &NxTools::MetadataWriteFinished, this, [this] {
+        nx_metadata_write_in_progress = false;
+        if (!close_pending) {
+            QtCommon::Game::ResetMetadata(false);
+            game_list->SetScanEnabled(true);
+            game_list->PopulateAsync(UISettings::values.game_dirs);
+        }
+    });
     connect(game_list, &GameList::ConvertToNxRequested, this,
             [this](const std::string& path) { OnGameListNxTool(path, &NxTools::ConvertToNx); });
     connect(game_list, &GameList::AddToNxRequested, this,
@@ -1662,7 +1671,7 @@ void MainWindow::ConnectWidgetEvents() {
     connect(game_list, &GameList::RemoveFromNxRequested, this,
             [this](const std::string& path) { OnGameListNxTool(path, &NxTools::RemoveFromNx); });
     connect(game_list, &GameList::EditNxMetadataRequested, this,
-            [this](const std::string& path) { OnGameListNxTool(path, &NxTools::EditNxMetadata); });
+            &MainWindow::OnGameListEditNxMetadata);
 #endif
     connect(game_list, &GameList::CopyTIDRequested, this, &MainWindow::OnGameListCopyTID);
     connect(game_list, &GameList::CreateShortcut, this, &MainWindow::OnGameListCreateShortcut);
@@ -2122,6 +2131,13 @@ bool MainWindow::SelectAndSetCurrentUser(
 
 void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletParameters params,
                           StartGameType type) {
+#ifdef LICHII_NX_TOOLS
+    if (nx_metadata_write_in_progress) {
+        QMessageBox::information(this, tr("NX Archive"),
+                                 tr("Wait for the NX metadata edit to finish before starting a game."));
+        return;
+    }
+#endif
     if (nup_running && filename.toStdString() == nup_source_path) {
         QMessageBox::information(this, tr("Conversion in Progress"),
                                  tr("This game cannot be started while its dump is being "
@@ -4402,6 +4418,33 @@ void MainWindow::OnGameListRefresh() {
 }
 
 #ifdef LICHII_NX_TOOLS
+void MainWindow::OnGameListEditNxMetadata(const std::string& game_path) {
+    const auto can_edit = [this] {
+        if (boot_in_progress || close_pending || nx_metadata_write_in_progress) {
+            return false;
+        }
+        if (emulation_running || QtCommon::system->IsPoweredOn()) {
+            QMessageBox::information(this, tr("NX Archive"),
+                                     tr("Stop emulation before editing NX metadata."));
+            return false;
+        }
+        return true;
+    };
+    if (!can_edit()) {
+        return;
+    }
+    nx_tools->EditNxMetadata(game_path, [this, &can_edit] {
+        if (!can_edit()) {
+            return false;
+        }
+        nx_metadata_write_in_progress = true;
+        game_list->SetScanEnabled(false);
+        // The manual provider keeps NX sessions alive through registered updates and DLC.
+        QtCommon::provider->ClearAllEntries();
+        return true;
+    });
+}
+
 void MainWindow::OnGameListNxTool(const std::string& game_path,
                                   void (NxTools::*tool)(const std::string&)) {
     // An archive edited in place must not be read by a running game.

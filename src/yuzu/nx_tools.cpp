@@ -675,7 +675,8 @@ void NxTools::RemoveFromNx(const std::string& archive_path) {
     Start(std::move(job));
 }
 
-void NxTools::EditNxMetadata(const std::string& archive_path) {
+void NxTools::EditNxMetadata(const std::string& archive_path,
+                             const std::function<bool()>& prepare_write) {
     if (running) {
         return;
     }
@@ -699,14 +700,16 @@ void NxTools::EditNxMetadata(const std::string& archive_path) {
 
     // What the game list shows now.
     std::string current_title;
+    std::string current_publisher;
     std::vector<u8> current_icon;
-    FileSys::NACP control;
+    std::vector<u8> original_icon;
     if (const auto file = vfs->OpenFile(archive_path, FileSys::OpenMode::Read);
         file != nullptr && QtCommon::system != nullptr) {
         Loader::AppLoader_NX loader(*QtCommon::system, file);
         loader.ReadTitle(current_title);
         loader.ReadIcon(current_icon);
-        loader.ReadControlData(control);
+        loader.ReadPublisher(current_publisher);
+        loader.ReadOriginalIcon(application_id.toULongLong(nullptr, 16), original_icon);
     }
 
     QDialog dialog(parent_widget);
@@ -719,8 +722,8 @@ void NxTools::EditNxMetadata(const std::string& archive_path) {
             ? QFileInfo(QString::fromStdString(archive_path)).completeBaseName()
             : QString::fromStdString(current_title);
     auto* name_edit = new QLineEdit(shown_title, &dialog);
-    auto* publisher_edit =
-        new QLineEdit(QString::fromStdString(control.GetDeveloperName()), &dialog);
+    const auto shown_publisher = QString::fromStdString(current_publisher);
+    auto* publisher_edit = new QLineEdit(shown_publisher, &dialog);
     form->addRow(tr("Title:"), name_edit);
     form->addRow(tr("Publisher:"), publisher_edit);
 
@@ -739,6 +742,24 @@ void NxTools::EditNxMetadata(const std::string& archive_path) {
     auto* icon_row = new QHBoxLayout;
     icon_row->addWidget(icon_label);
     icon_row->addWidget(choose, 0, Qt::AlignBottom);
+    QByteArray new_icon;
+    QPixmap original;
+    if (!original_icon.empty() &&
+        (original.loadFromData(original_icon.data(), static_cast<uint>(original_icon.size()),
+                               "JPEG") ||
+         original.loadFromData(original_icon.data(), static_cast<uint>(original_icon.size()),
+                               "PNG"))) {
+        auto* restore = new QPushButton(tr("Restore Original Image"), &dialog);
+        icon_row->addWidget(restore, 0, Qt::AlignBottom);
+        connect(restore, &QPushButton::clicked, &dialog, [&] {
+            new_icon = original_icon == current_icon
+                           ? QByteArray{}
+                           : QByteArray(reinterpret_cast<const char*>(original_icon.data()),
+                                        static_cast<qsizetype>(original_icon.size()));
+            icon_label->setPixmap(
+                original.scaled(128, 128, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        });
+    }
     icon_row->addStretch();
     form->addRow(tr("Icon:"), icon_row);
     layout->addLayout(form);
@@ -748,7 +769,6 @@ void NxTools::EditNxMetadata(const std::string& archive_path) {
         &dialog));
 
     // The chosen image as a 256x256 JPEG, like a console icon.
-    QByteArray new_icon;
     connect(choose, &QPushButton::clicked, &dialog, [&] {
         const QString path = QFileDialog::getOpenFileName(
             &dialog, tr("Choose Image"), {},
@@ -793,12 +813,12 @@ void NxTools::EditNxMetadata(const std::string& archive_path) {
         job->args.push_back("title=" + name.toStdString());
     }
     const auto publisher = publisher_edit->text().trimmed();
-    if (!publisher.isEmpty() && publisher.toStdString() != control.GetDeveloperName()) {
+    if (!publisher.isEmpty() && publisher != shown_publisher.trimmed()) {
         job->args.push_back("publisher=" + publisher.toStdString());
     }
     if (!new_icon.isEmpty()) {
         job->icon_file = std::make_unique<QTemporaryFile>(
-            QDir::tempPath() + QStringLiteral("/lichii-icon-XXXXXX.jpg"));
+            QDir::tempPath() + QStringLiteral("/lichii-icon-XXXXXX"));
         if (!job->icon_file->open() || job->icon_file->write(new_icon) != new_icon.size() ||
             !job->icon_file->flush()) {
             QMessageBox::warning(parent_widget, title, tr("The icon cannot be saved."));
@@ -807,7 +827,7 @@ void NxTools::EditNxMetadata(const std::string& archive_path) {
         job->icon_file->close();
         job->args.push_back("icon=" + ToUtf8(job->icon_file->fileName()));
     }
-    if (job->args.size() == 3) {
+    if (job->args.size() == 3 || running || !prepare_write()) {
         return;
     }
     job->done_message = tr("The NX archive metadata was updated.");
@@ -999,6 +1019,10 @@ void NxTools::Finished(std::shared_ptr<Job> job, int code, QString error) {
     }
     running.reset();
     emit RunningChanged(false);
+    const bool metadata_write = job->args.front() == "set-metadata";
+    if (metadata_write) {
+        emit MetadataWriteFinished();
+    }
 
     // add keeps the content it committed before a failure or a cancel, also across a retry:
     // report it and refresh.
@@ -1022,7 +1046,9 @@ void NxTools::Finished(std::shared_ptr<Job> job, int code, QString error) {
                     tr("Already in the archive: %1").arg(job->skipped.join(QStringLiteral(", ")));
         }
         QMessageBox::information(parent_widget, job->title, text);
-        emit ArchivesChanged();
+        if (!metadata_write) {
+            emit ArchivesChanged();
+        }
         break;
     }
     case NXFORMAT_CANCELLED:
