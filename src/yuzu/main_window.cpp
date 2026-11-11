@@ -2742,8 +2742,9 @@ void MainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target,
                              tr("Folder does not exist!"));
         return;
     }
-    LOG_INFO(Frontend, "Opening {} path for program_id={:016x}", open_target.toStdString(),
-             program_id);
+    // The path too (2026-11-11: Explorer said a save folder that exists "isn't available").
+    LOG_INFO(Frontend, "Opening {} path for program_id={:016x}: {}", open_target.toStdString(),
+             program_id, qpath.toStdString());
     QDesktopServices::openUrl(QUrl::fromLocalFile(qpath));
 }
 
