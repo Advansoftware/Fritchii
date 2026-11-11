@@ -21,6 +21,8 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
+#include <QProcess>
 #include <QPalette>
 #include <QPixmap>
 #include <QProxyStyle>
@@ -31,6 +33,7 @@
 
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
+#include "frontend_common/profile_import.h"
 #include "common/logging.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
@@ -270,6 +273,11 @@ void RestructureMenus(Ui::MainWindow& ui, QMainWindow& window, const MenuHooks& 
     QObject::connect(donate, &QAction::triggered, &window, [] { OpenDonate(); });
     ui.menu_Help->insertAction(first_help, discord);
     ui.menu_Help->insertAction(first_help, donate);
+    // v5.8.1: copy a profile again after the first launch's automatic import (a player whose
+    // newest saves were in Lichii 150+'s folder got the older eden copy).
+    auto* copy_data = new QAction(tr("&Copy Data from Eden or Lichii..."), &window);
+    QObject::connect(copy_data, &QAction::triggered, &window, [&window] { CopyDataFromOldFolder(window); });
+    ui.menu_Help->insertAction(first_help, copy_data);
 
     // Plain names.
     ui.menu_recent_files->setTitle(tr("Open &Recent"));
@@ -529,6 +537,62 @@ QString& PendingSettingsRestore() {
 
 void OpenDiscord() {
     QDesktopServices::openUrl(QUrl(QString::fromLatin1(DiscordInvite)));
+}
+
+void CopyDataFromOldFolder(QMainWindow& window) {
+    namespace fs = std::filesystem;
+    using namespace Common::FS;
+    if (IsPortableMode()) {
+        QMessageBox::information(&window, QStringLiteral("Fritchii"),
+                                 QObject::tr("This Fritchii keeps its data in the user folder next to "
+                                    "lichii.exe."));
+        return;
+    }
+    std::vector<std::string> folders;
+    for (const EmuPath path : {LegacyEdenDir, LichiiDir}) {
+        if (fs::is_directory(GetLegacyPath(path))) {
+            folders.push_back(PathToUTF8String(GetLegacyPath(path).filename()));
+        }
+    }
+    if (folders.empty()) {
+        QMessageBox::information(&window, QStringLiteral("Fritchii"),
+                                 QObject::tr("No eden or lichii folder was found in %APPDATA%."));
+        return;
+    }
+    QMessageBox box(QMessageBox::Question, QStringLiteral("Fritchii"),
+                    QObject::tr("Copy your settings, saves, keys and mods from another folder?\n\n"
+                       "Fritchii restarts and copies them over its own. Its current data is kept "
+                       "next to it in backup folders, and the folder you copy from is not "
+                       "changed."),
+                    QMessageBox::NoButton, &window);
+    std::vector<std::pair<QAbstractButton*, std::string>> choices;
+    for (const auto& folder : folders) {
+        choices.emplace_back(box.addButton(QObject::tr("Copy from %1").arg(QString::fromStdString(folder)),
+                                           QMessageBox::AcceptRole),
+                             folder);
+    }
+    box.addButton(QMessageBox::Cancel);
+    box.exec();
+    std::string chosen;
+    for (const auto& [button, folder] : choices) {
+        if (box.clickedButton() == button) {
+            chosen = folder;
+        }
+    }
+    if (chosen.empty()) {
+        return;
+    }
+    try {
+        FrontendCommon::RequestProfileImport(chosen);
+    } catch (const std::exception& error) {
+        QMessageBox::warning(&window, QStringLiteral("Fritchii"), QString::fromUtf8(error.what()));
+        return;
+    }
+    // The copy runs when Fritchii starts, before anything reads the settings.
+    QObject::connect(qApp, &QCoreApplication::aboutToQuit, qApp, [] {
+        QProcess::startDetached(QCoreApplication::applicationFilePath(), {});
+    });
+    window.close();
 }
 
 void OpenDonate() {

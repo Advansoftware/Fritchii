@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cwctype>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #ifndef SI_NO_CONVERSION
 #define SI_NO_CONVERSION 1
 #endif
@@ -46,6 +48,54 @@ bool NeedsLegacyProfileImport() {
         }
     }
     return false;
+#endif
+}
+
+void RequestProfileImport(const std::string& folder) {
+    const auto state = ProfileImportStateDirectory();
+    fs::create_directories(state);
+    std::ofstream file{state / "import-request", std::ios::trunc};
+    file << folder;
+    file.close();
+    if (!file) {
+        throw std::runtime_error("Could not write the import request");
+    }
+}
+
+std::string TakeProfileImportRequest() {
+#ifdef __ANDROID__
+    return {};
+#else
+    if (Common::FS::IsPortableMode()) {
+        return {};
+    }
+    const auto state = ProfileImportStateDirectory();
+    const auto request = state / "import-request";
+    std::error_code ec;
+    if (!fs::exists(request, ec)) {
+        return {};
+    }
+    std::string folder;
+    {
+        std::ifstream file{request};
+        std::getline(file, folder);
+    }
+    fs::remove(request, ec);
+    if (folder != "eden" && folder != "lichii") {
+        return {};
+    }
+    // The Fritchii that asked is closing: let it finish writing its config first.
+    std::this_thread::sleep_for(std::chrono::seconds{2});
+    if (Migration::GetState(state) == Migration::State::Pending) {
+        Migration::Recover(state);
+    }
+    // Forget the earlier import's outcome (its lock file stays) so RunImport runs again.
+    for (const auto& entry : fs::directory_iterator(state, ec)) {
+        if (entry.path().filename() != "lock") {
+            fs::remove_all(entry.path(), ec);
+        }
+    }
+    return folder;
 #endif
 }
 

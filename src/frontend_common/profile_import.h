@@ -3,11 +3,18 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 namespace FrontendCommon {
 
 std::filesystem::path ProfileImportStateDirectory();
 bool NeedsLegacyProfileImport();
+/// Fritchii v5.8.1, Help > Copy Data from Eden or Lichii: asks the next launch to copy the profile
+/// in that folder ("eden" or "lichii") over Fritchii's own, the current one kept as backups.
+void RequestProfileImport(const std::string& folder);
+/// The folder a request names, or empty. Takes it (the request file is removed), puts back an
+/// interrupted import and clears the done/fresh state, so the next import runs.
+std::string TakeProfileImportRequest();
 void CheckLegacyProfileBeforeConfig();
 std::filesystem::path RemapImportedPath(const std::filesystem::path& value,
                                         const std::filesystem::path& source,

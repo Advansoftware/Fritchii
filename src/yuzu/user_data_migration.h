@@ -21,7 +21,7 @@ public:
 private:
     /// Fritchii v5.8: finds the newest old profile, copies it into the Fritchii folder and says
     /// what it did in one box. The old profile is never changed.
-    void AutoImport(QMainWindow* main_window);
+    void AutoImport(QMainWindow* main_window, const std::string& only = {});
     void ShowMigrationPrompt(QMainWindow* main_window);
     void ShowMigrationCancelledMessage(QMainWindow* main_window);
     void MigrateUserData(QMainWindow* main_window, const bool clear_shader_cache,

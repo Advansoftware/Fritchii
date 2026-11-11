@@ -38,6 +38,11 @@
 UserDataMigrator::UserDataMigrator(QMainWindow* main_window) {
     // NOTE: Logging is not initialized yet, do not produce logs here.
 
+    // Help > Copy Data from Eden or Lichii (v5.8.1) left a request and restarted Fritchii.
+    if (const auto request = FrontendCommon::TakeProfileImportRequest(); !request.empty()) {
+        AutoImport(main_window, request);
+        return;
+    }
     if (!FrontendCommon::NeedsLegacyProfileImport()) {
         return;
     }
@@ -247,9 +252,24 @@ fs::file_time_type LastUsed(const fs::path& config) {
     return ec ? fs::file_time_type::min() : time;
 }
 
-/// A previous Fritchii first, then the newer of Eden and Lichii (qt-config.ini is rewritten at
-/// every exit), then the newest of the older emulators.
-std::optional<OldProfile> PickOldProfile() {
+/// When the profile last saved a game: its newest save file (falling back to qt-config.ini).
+/// v5.8.1: a player who moved from an earlier Fritchii (eden, with frizti.ini) to Lichii 150+
+/// (lichii) got the older eden data, because frizti.ini won outright; the newest saves win now.
+fs::file_time_type LastSaved(const fs::path& user, const fs::path& config) {
+    auto newest = fs::file_time_type::min();
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(user / NAND_DIR / "user" / "save", ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (it->is_regular_file(ec)) {
+            newest = std::max(newest, it->last_write_time(ec));
+        }
+    }
+    return newest != fs::file_time_type::min() ? newest : LastUsed(config);
+}
+
+/// The newer of Eden and Lichii by their newest saves, then the newest of the older emulators.
+/// `only`: that folder only ("eden" or "lichii", Help > Copy Data from Eden or Lichii).
+std::optional<OldProfile> PickOldProfile(const std::string& only = {}) {
     using namespace Common::FS;
     struct Candidate {
         const char* name;
@@ -269,20 +289,18 @@ std::optional<OldProfile> PickOldProfile() {
     int best_rank = 3;
     for (const auto& candidate : candidates) {
         const auto& user = GetLegacyPath(candidate.user);
-        if (!fs::is_directory(user)) {
+        if (!fs::is_directory(user) ||
+            (!only.empty() && PathToUTF8String(user.filename()) != only)) {
             continue;
         }
         const auto& config = GetLegacyPath(candidate.config);
         OldProfile profile{QObject::tr(candidate.name), user, config,
-                           fs::exists(config / "frizti.ini"), LastUsed(config)};
-        const int rank = profile.fritchii ? -1 : candidate.rank;
+                           fs::exists(config / "frizti.ini"), LastSaved(user, config)};
+        const int rank = candidate.rank;
         if (!best || rank < best_rank || (rank == best_rank && profile.used > best->used)) {
             best = profile;
             best_rank = rank;
         }
-    }
-    if (best && best->fritchii) {
-        best->name = QStringLiteral("Fritchii");
     }
     return best;
 }
@@ -362,7 +380,7 @@ ImportPlan PlanImport(const OldProfile& old) {
 
 } // namespace
 
-void UserDataMigrator::AutoImport(QMainWindow* main_window) {
+void UserDataMigrator::AutoImport(QMainWindow* main_window, const std::string& only) {
     using namespace Common::FS;
     const auto state_dir = FrontendCommon::ProfileImportStateDirectory();
     const auto& destination = GetEdenPath(EdenPath::EdenDir);
@@ -370,12 +388,15 @@ void UserDataMigrator::AutoImport(QMainWindow* main_window) {
     if (Migration::GetState(state_dir) == Migration::State::Pending) {
         Migration::Recover(state_dir); // an import a crash or power cut interrupted
     }
-    // Fritchii data that is already there (copied by hand, or an earlier import) is kept as is.
-    if (fs::exists(GetEdenPath(EdenPath::ConfigDir) / "qt-config.ini")) {
+    // Fritchii data that is already there (copied by hand, or an earlier import) is kept as is,
+    // unless the player asked for a copy (Help > Copy Data from Eden or Lichii): then RunImport
+    // keeps it in backup folders beside the new copy.
+    const bool requested = !only.empty();
+    if (!requested && fs::exists(GetEdenPath(EdenPath::ConfigDir) / "qt-config.ini")) {
         Migration::MarkFresh(state_dir);
         return;
     }
-    const auto old = PickOldProfile();
+    const auto old = PickOldProfile(only);
     if (!old) {
         Migration::MarkFresh(state_dir);
         return;
@@ -475,6 +496,10 @@ void UserDataMigrator::AutoImport(QMainWindow* main_window) {
                                 "Keep that folder.")
                         .arg(import.linked.size() == 1 ? import.linked[0]
                                                        : QStringLiteral("nand and sdmc"));
+        }
+        if (requested) {
+            text += QObject::tr("\n\nFritchii's previous data is kept next to it, in the folders "
+                                "ending in \".backup\".");
         }
         text += QObject::tr("\n\nShaders get prepared again the first time you start a game.\n"
                             "Your old folder was not changed: %1")
