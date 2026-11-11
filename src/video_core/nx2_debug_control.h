@@ -178,16 +178,6 @@ inline std::atomic<int> g_idle_pause{-1};
 /// EXP35=2 (live): every guest write of cached memory is collected for the back, not only writes to
 /// never-GPU-written pages. EXP60 (live): 1 = a guest read whose cache mutexes stay taken after a
 /// short spin is answered with a flush request served by the back (GetFlushArea).
-/// EXP47 (live; RasterizerVulkan::GetFlushArea, BufferCache::Nx2CleanForRead): 1 = a guest read
-/// of a GPU-written page whose GPU writes are all in guest memory already (no image ever
-/// registered there, no byte of gpu_modified_ranges on it) is answered preemptively without the
-/// texture and buffer caches' mutexes, which the split's back holds through bursts of draws. The
-/// buffer cache keeps per-page bits of where gpu_modified_ranges may reach (set at every GPU
-/// write before its read traps are armed, whatever the switch; cleared under its mutex after
-/// downloads land, only while the switch is on), and the read's consumed trap is recorded
-/// lock-free and forgotten by the page's next ArmReadTraps, as the locked path's Subtract did.
-/// Any doubt takes the locked path. Counted as "downloaded lock-free (EXP47)" in the guest access
-/// line. Off by default, not measured yet.
 /// EXP49 (live; async read-back, the core of zortos293/Lichii#1028 0b83798bf6): 1 = a guest read
 /// of GPU-written buffer memory (GPU::OnCPURead) has the GPU thread record and submit the
 /// downloads without waiting for the host GPU (RasterizerVulkan::FlushRegionForRead). The reading

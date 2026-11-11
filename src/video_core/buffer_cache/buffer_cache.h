@@ -400,10 +400,6 @@ void BufferCache<P>::DownloadMemory(DAddr device_addr, u64 size) {
                                                    });
             });
             DownloadRangesMemory(ranges);
-            // EXP47: synchronous, so the bytes are in guest memory now.
-            for (const auto& [range_addr, range_size] : ranges) {
-                Nx2NoteGpuClean(range_addr, range_addr + range_size);
-            }
             return;
         }
     }
@@ -414,33 +410,6 @@ void BufferCache<P>::DownloadMemory(DAddr device_addr, u64 size) {
             DownloadBufferMemory(buffer, start, end - start);
         }
     });
-    // EXP47: as above.
-    Nx2NoteGpuClean(device_addr, device_addr + size);
-}
-
-template <class P>
-void BufferCache<P>::Nx2NoteGpuClean(DAddr begin, DAddr end) {
-    // Bits left set only send reads to the locked path, so nothing is cleared while the switch is
-    // off (bits set then stay until a landing with it on).
-    if (begin >= end || VideoCore::Nx2Debug::Experiment(47) == 0) {
-        return;
-    }
-    const DAddr page_begin = Common::AlignDown(begin, DEVICE_PAGESIZE);
-    const DAddr page_end = Common::AlignUp(end, DEVICE_PAGESIZE);
-    // The pages between the GPU-modified ranges left in [page_begin, page_end).
-    DAddr next = page_begin;
-    gpu_modified_ranges.ForEachInRange(page_begin, page_end - page_begin,
-                                       [&](DAddr lower, DAddr upper) {
-                                           const DAddr keep = Common::AlignDown(lower, DEVICE_PAGESIZE);
-                                           if (keep > next) {
-                                               nx2_gpu_dirty_pages.Clear(next, keep - next);
-                                           }
-                                           next = (std::max)(next,
-                                                             Common::AlignUp(upper, DEVICE_PAGESIZE));
-                                       });
-    if (page_end > next) {
-        nx2_gpu_dirty_pages.Clear(next, page_end - next);
-    }
 }
 
 template <class P>
@@ -656,8 +625,6 @@ void BufferCache<P>::WriteReadDownloads(u64 tick) {
                         memory_tracker.UnmarkRegionAsGpuModified(page, DEVICE_PAGESIZE);
                     }
                 }
-                // EXP47: the bytes are in guest memory now (written above).
-                Nx2NoteGpuClean(start, end);
             });
             // Freed by the GPU thread (TickFrame).
             async_buffers_death_ring.push_back(download.staging);
@@ -943,8 +910,6 @@ bool BufferCache<P>::DMACopy(GPUVAddr src_address, GPUVAddr dest_address, u64 am
         const DAddr diff = base_address - *cpu_src_address;
         const DAddr new_base_address = *cpu_dest_address + diff;
         tmp_intervals.push_back({new_base_address, size});
-        // EXP47: before the range is GPU-modified and its read traps are armed (Nx2CleanForRead).
-        nx2_gpu_dirty_pages.Set(new_base_address, size);
         QueueFenceDownload(new_base_address, size);
     };
     gpu_modified_ranges.ForEachInRange(*cpu_src_address, amount, mirror);
@@ -3265,8 +3230,6 @@ void BufferCache<P>::MarkWrittenBuffer(BufferId buffer_id, DAddr device_addr, u3
     OutdateReadDownloads(device_addr, size);
     memory_tracker.MarkRegionAsGpuModified(device_addr, size);
     MarkVertexBuffersStale(device_addr, size);
-    // EXP47: before the range is GPU-modified and its read traps are armed (Nx2CleanForRead).
-    nx2_gpu_dirty_pages.Set(device_addr, size);
     gpu_modified_ranges.Add(device_addr, size);
     QueueFenceDownload(device_addr, size);
     if (Tegra::g_nx2_ampere.load(std::memory_order_relaxed)) {

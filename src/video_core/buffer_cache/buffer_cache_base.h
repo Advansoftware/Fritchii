@@ -321,33 +321,6 @@ public:
         return !AsyncBufferDownloads();
     }
 
-    /// EDEN_NX2_EXP47, any thread, without `mutex`: whether GetFlushArea would answer this
-    /// page-aligned range preemptively with no GPU-modified bytes in it, read from
-    /// nx2_gpu_dirty_pages. True also consumes the range's read traps as GetFlushArea does (the
-    /// next ArmReadTraps over them forgets them). False when any doubt remains: the caller asks
-    /// GetFlushArea under `mutex`.
-    [[nodiscard]] bool Nx2CleanForRead(DAddr page_begin, u64 size) {
-        // Most reads that reach here are of pages still GPU-modified: no trap mark for them.
-        if (nx2_gpu_dirty_pages.Any(page_begin, size, std::memory_order_relaxed)) {
-            return false;
-        }
-        // The mark first, then the dirty bits again (both sequentially consistent). A GPU write
-        // sets the dirty bits before ArmReadTraps looks for marks: either that Arm sees this
-        // mark and arms the trap again, or this load sees its dirty bits.
-        if (!read_trapped_ranges.ConsumeLockFree(page_begin, size)) {
-            return false;
-        }
-        return !nx2_gpu_dirty_pages.Any(page_begin, size, std::memory_order_seq_cst);
-    }
-
-    /// EXP47, `mutex` held: GetFlushArea just answered this page-aligned range preemptively (no
-    /// GPU-modified bytes left on it), so later reads of it can take the lock-free answer too.
-    /// Most pages leave gpu_modified_ranges some other way than a download landing (the CPU
-    /// overwrote them, a copy replaced them): 98% of Castle Town's locked reads were such pages.
-    void Nx2NoteReadClean(DAddr page_begin, DAddr page_end) {
-        Nx2NoteGpuClean(page_begin, page_end);
-    }
-
     bool InlineMemory(DAddr dest_address, size_t copy_size, std::span<const u8> inlined_buffer);
 
     void BindGraphicsUniformBuffer(size_t stage, u32 index, GPUVAddr gpu_addr, u32 size);
@@ -1004,10 +977,6 @@ private:
     void ArmReadTraps(DAddr device_addr, u64 size) {
         const DAddr begin = Common::AlignDown(device_addr, Core::DEVICE_PAGESIZE);
         const DAddr end = Common::AlignUp(device_addr + size, Core::DEVICE_PAGESIZE);
-        // EDEN_NX2_EXP47: the pages hold GPU-written bytes guest memory lacks, set before Arm
-        // looks for traps consumed without the lock (Nx2CleanForRead). The callers that add to
-        // gpu_modified_ranges set them already; this covers any other caller.
-        nx2_gpu_dirty_pages.Set(device_addr, size);
         if (!read_trapped_ranges.Arm(begin, end - begin)) {
             return;
         }
@@ -1015,17 +984,6 @@ private:
     }
 
     ReadTrapTracker read_trapped_ranges;
-    /// EDEN_NX2_EXP47: device pages that may hold bytes of gpu_modified_ranges, readable without
-    /// `mutex` (Nx2CleanForRead). Set whenever gpu_modified_ranges grows (always, whatever the
-    /// switch: a page missing here would let a read skip its flush), before the write's read
-    /// traps are armed. Cleared under `mutex` only where downloads have landed in guest memory
-    /// and gpu_modified_ranges no longer touches the page (Nx2NoteGpuClean, while the switch is
-    /// on); a page left set only sends its reads to the locked path.
-    AtomicPageBits nx2_gpu_dirty_pages;
-    /// EXP47: clears nx2_gpu_dirty_pages over [begin, end)'s pages that gpu_modified_ranges no
-    /// longer touches. `mutex` held, and only once the downloads that left them are in guest
-    /// memory.
-    void Nx2NoteGpuClean(DAddr begin, DAddr end);
     /// Ranges the guest CPU read after GPU writes. A read that must flush downloads the GPU
     /// writes in all of them, so the reads that usually follow it find nothing left to flush.
     Common::RangeSet<DAddr> cpu_read_ranges;
