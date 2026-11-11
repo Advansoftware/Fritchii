@@ -2481,6 +2481,8 @@ namespace {
 /// lock-free answers, the locked ones, and the locked reads that must flush.
 struct GuestAccessCounters {
     std::atomic<u64> read_fast{};
+    std::atomic<u64> read_clean{}; ///< EXP47: GPU-written pages found downloaded, lock-free
+    std::atomic<u64> read_image_pages{}; ///< EXP47: locked because an image was ever there
     std::atomic<u64> read_locked{};
     std::atomic<u64> read_flush{};
     std::atomic<u64> write_locked{};
@@ -2492,6 +2494,7 @@ void CountGuestAccess(std::atomic<u64>& counter) {
     counter.fetch_add(1, std::memory_order_relaxed);
     auto& c = g_guest_access;
     const u64 total = c.read_fast.load(std::memory_order_relaxed) +
+                      c.read_clean.load(std::memory_order_relaxed) +
                       c.read_locked.load(std::memory_order_relaxed);
     if ((total & 4095) != 0) {
         return;
@@ -2504,9 +2507,11 @@ void CountGuestAccess(std::atomic<u64>& counter) {
         return;
     }
     LOG_INFO(Render_Vulkan,
-             "Guest access of cached memory (5 s): reads {} lock-free, {} locked ({} must "
-             "flush, {} handed to the back); writes {} locked, {} collected",
-             c.read_fast.exchange(0), c.read_locked.exchange(0), c.read_flush.exchange(0),
+             "Guest access of cached memory (5 s): reads {} lock-free, {} downloaded lock-free "
+             "(EXP47; {} on image pages), {} locked ({} must flush, {} handed to the back); "
+             "writes {} locked, {} collected",
+             c.read_fast.exchange(0), c.read_clean.exchange(0), c.read_image_pages.exchange(0),
+             c.read_locked.exchange(0), c.read_flush.exchange(0),
              Tegra::g_nx2_guest_reads_handed.exchange(0, std::memory_order_relaxed),
              c.write_locked.exchange(0),
              Tegra::g_nx2_guest_writes_collected.exchange(0, std::memory_order_relaxed));
@@ -2530,6 +2535,26 @@ VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushArea(DAddr addr, u64
             .end_address = page_end,
             .preemtive = true,
         };
+    }
+    // EDEN_NX2_EXP47 (live): a GPU-written page whose writes are all in guest memory already (an
+    // earlier read's download took them: a flushing read downloads every range the CPU read
+    // before) is answered without the mutexes, as the locked path would: preemptive, the read's
+    // trap consumed. The texture cache needs no look on pages no image was ever registered on
+    // (page_filter); the buffer cache's GPU-modified pages are kept in bits readable without its
+    // mutex (BufferCache::Nx2CleanForRead). Any doubt takes the locked path below.
+    if (VideoCore::Nx2Debug::Experiment(36) == 0 && VideoCore::Nx2Debug::Experiment(47) != 0) {
+        if (texture_cache.page_filter.Any(addr, size)) {
+            // Counted: if these dominate, the texture cache needs bits of its own.
+            g_guest_access.read_image_pages.fetch_add(1, std::memory_order_relaxed);
+        } else if (!buffer_cache.FlushesOnCpuRead() ||
+                   buffer_cache.Nx2CleanForRead(page_begin, page_end - page_begin)) {
+            CountGuestAccess(g_guest_access.read_clean);
+            return VideoCore::RasterizerDownloadArea{
+                .start_address = page_begin,
+                .end_address = page_end,
+                .preemtive = true,
+            };
+        }
     }
     // EDEN_NX2_EXP60=1: the back holds both mutexes through bursts of draws and re-takes them right
     // after each release, so a guest read waiting for them slept for milliseconds (Fable answer
@@ -2590,6 +2615,11 @@ VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushAreaLocked(DAddr add
         std::scoped_lock lock{buffer_cache.mutex};
         auto area = buffer_cache.GetFlushArea(addr, size);
         if (area) {
+            // EXP47: nothing GPU-modified left on these pages, checked under the lock: the next
+            // reads of them can be answered without it, until the GPU writes them again.
+            if (area->preemtive && !area->in_flight) {
+                buffer_cache.Nx2NoteReadClean(area->start_address, area->end_address);
+            }
             return *area;
         }
     }
