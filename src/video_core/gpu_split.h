@@ -207,6 +207,13 @@ public:
         wake.fetch_add(1, std::memory_order_seq_cst);
         wake.notify_one();
     }
+    /// Any thread, a hint (relaxed loads): whether the front waits for the back now, for a ring
+    /// position (WaitFor), a drain or a submission (hook_requested), or asleep in Backoff.
+    [[nodiscard]] bool FrontWaitsForBack() const {
+        return wait_target.load(std::memory_order_relaxed) != ~u64{0} ||
+               hook_requested.load(std::memory_order_relaxed) ||
+               front_waiting.load(std::memory_order_relaxed);
+    }
 
     /// Starts the back thread once the split is wanted (EDEN_NX2_SPLIT=1, a Switch 2 title,
     /// commands read without cache flushes). Called by the front between commands.

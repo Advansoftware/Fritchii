@@ -893,6 +893,7 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
     }
     EndPendingOperations();
     InvalidateState();
+    draws_since_submit = 0;
 
     const u64 signal_value = master_semaphore->NextTick();
     // The recording thread's hand-off of this tick to the worker (and the GPU).

@@ -525,6 +525,25 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
             return static_cast<RasterizerVulkan*>(argument)->FencesQuiet(strict, *epoch);
         },
         this);
+    submit_while_waited =
+        VideoCommon::Nx2Perf::On(VideoCommon::Nx2Perf::Opt::SubmitWhileWaited);
+    if (submit_while_waited) {
+        const auto draws = [](const char* name, u32 fallback) {
+            const char* value = std::getenv(name);
+            if (value == nullptr || value[0] < '0' || value[0] > '9') {
+                return fallback;
+            }
+            char* end = nullptr;
+            const unsigned long parsed = std::strtoul(value, &end, 10);
+            return *end == '\0' ? static_cast<u32>(std::clamp(parsed, 1UL, 1'048'576UL))
+                                : fallback;
+        };
+        submit_waited_draws = draws("EDEN_NX2_SUBMIT_WAITED_DRAWS", 64);
+        submit_idle_draws = draws("EDEN_NX2_SUBMIT_IDLE_DRAWS", 128);
+        LOG_INFO(Render_Vulkan, "Nx2Perf submit_while_waited: {} draws while the front waits, {} "
+                                "once the GPU is idle",
+                 submit_waited_draws, submit_idle_draws);
+    }
 }
 
 RasterizerVulkan::~RasterizerVulkan() {
@@ -3767,6 +3786,15 @@ void RasterizerVulkan::FlushWork() {
     static constexpr bool android = false;
 #endif // __ANDROID__
     const bool native = gpu_memory->UsesNativeTiling();
+    if (submit_while_waited && native && !android) {
+        scheduler.NoteDraw();
+        if ((scheduler.DrawsSinceSubmit() & 31) == 0 && VideoCommon::GpuSplit::OnBackThread() &&
+            SubmitWhileWaited()) {
+            draw_counter = 0;
+            pending_native_work = false;
+            return;
+        }
+    }
     // The 128-draw native budget is tuned for MoltenVK; desktop Vulkan takes the legacy 4096 (#161).
     const u32 default_native_budget =
         (VideoCommon::Nx2Perf::On(VideoCommon::Nx2Perf::Opt::SubmitBudget) && !device.IsMoltenVK()) ? 4096U
@@ -3810,6 +3838,25 @@ void RasterizerVulkan::FlushWork() {
     if (native && !android) {
         pending_native_work = true;
     }
+}
+
+bool RasterizerVulkan::SubmitWhileWaited() {
+    // A command list copy or a fence submitted later waits behind everything recorded since the
+    // last submission: the host GPU starts on it now while the front can't use the time, or the
+    // GPU would sit idle. The same commands in the same order; only the submissions move, at a
+    // draw boundary on the back, as fences and list copies already submit.
+    const u32 draws = scheduler.DrawsSinceSubmit();
+    if (!(draws >= submit_waited_draws && VideoCommon::GpuSplit::Get().FrontWaitsForBack()) &&
+        !(draws >= submit_idle_draws && scheduler.GpuCaughtUp())) {
+        return false;
+    }
+    static std::atomic<u64> submits{};
+    if ((submits.fetch_add(1, std::memory_order_relaxed) & 0xfff) == 0) {
+        LOG_INFO(Render_Vulkan, "Nx2Perf submit_while_waited: {} early submissions",
+                 submits.load(std::memory_order_relaxed));
+    }
+    scheduler.Flush();
+    return true;
 }
 
 AccelerateDMA::AccelerateDMA(BufferCache& buffer_cache_, TextureCache& texture_cache_,

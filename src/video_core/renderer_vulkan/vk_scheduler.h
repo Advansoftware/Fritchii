@@ -82,6 +82,19 @@ public:
     [[nodiscard]] bool IsSubmitted(u64 tick) const noexcept {
         return tick < master_semaphore->CurrentTick();
     }
+    /// Nx2Perf submit_while_waited: FlushWork counts its draws; only a submission resets the
+    /// count, not a deferred FlushCommands.
+    void NoteDraw() noexcept {
+        ++draws_since_submit;
+    }
+    [[nodiscard]] u32 DrawsSinceSubmit() const noexcept {
+        return draws_since_submit;
+    }
+    /// Whether the host GPU has finished everything submitted so far (reads the semaphore).
+    [[nodiscard]] bool GpuCaughtUp() {
+        master_semaphore->Refresh();
+        return master_semaphore->KnownGpuTick() + 1 >= master_semaphore->CurrentTick();
+    }
 
     /// Waits for the worker thread to finish executing everything. After this function returns it's
     /// safe to touch worker resources.
@@ -482,6 +495,7 @@ private:
     bool render_pass_has_stores{};
     bool compute_writes_pending{};
     bool graphics_pipeline_missing{};
+    u32 draws_since_submit{};
     std::unique_ptr<CommandPool> command_pool;
 
     std::unique_ptr<UploadBatch> upload_batch;

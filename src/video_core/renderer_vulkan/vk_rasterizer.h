@@ -212,6 +212,9 @@ private:
     bool TryNx2IndirectReset(bool is_indexed, u32 instance_count);
 
     void FlushWork();
+    /// Nx2Perf submit_while_waited: submits on the split's back while the front waits for it or
+    /// the host GPU is idle. True when it submitted.
+    bool SubmitWhileWaited();
 
     void TraceRenderState(bool is_indexed, const char* outcome, const Framebuffer* framebuffer);
 
@@ -308,6 +311,9 @@ private:
     boost::container::static_vector<VkSampler, MAX_TEXTURES> sampler_handles;
 
     u32 draw_counter = 0;
+    bool submit_while_waited{};
+    u32 submit_waited_draws{64};
+    u32 submit_idle_draws{128};
     std::optional<u64> oot_camera_sample_frame;
     mutable std::optional<VideoCommon::OcarinaUpscaleBackend> oot_backend;
     struct OcarinaMotionTrace {

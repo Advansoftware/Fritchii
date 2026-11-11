@@ -44,6 +44,9 @@ enum class Opt : unsigned {
     SortedPageBatches,
     AsyncPipelines,    ///< Native graphics SPIR-V emitted by the pipeline worker, not the back
     UnswizzleWorkers,
+    /// Split back, Ampere: submits recorded draws while the front waits for the back or the
+    /// host GPU has run dry (Djihads80/Eglantine#794)
+    SubmitWhileWaited,
     Count,
 };
 
@@ -52,6 +55,7 @@ inline constexpr std::array<std::string_view, static_cast<size_t>(Opt::Count)> o
     "usage_tracker",  "bank_check",      "split_overlap", "front_sleep", "submit_budget",
     "fragment_barrier", "fence_flush",   "frames_ahead", "pipeline_retention",
     "write_intersections", "sorted_page_batches", "async_pipelines", "unswizzle_workers",
+    "submit_while_waited",
 };
 
 inline bool Enabled() {
@@ -91,7 +95,7 @@ inline bool On(Opt opt) {
                                      bit(Opt::IndexRebind) | bit(Opt::SubmitBudget) |
                                      bit(Opt::FenceFlush) | bit(Opt::FragmentBarrier) |
                                      bit(Opt::FrontSleep) | bit(Opt::AsyncPipelines) |
-                                     bit(Opt::Bounds);
+                                     bit(Opt::Bounds) | bit(Opt::SubmitWhileWaited);
         unsigned mask = (default_off & ~names("EDEN_NX2_PERF_ON")) | names("EDEN_NX2_PERF_OFF");
         mask |= bit(Opt::SplitOverlap);
         if (const char* value = std::getenv("EDEN_NX2_PERF_FRAMES_AHEAD"); value && value[0] == '0') {
