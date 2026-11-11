@@ -7,12 +7,16 @@
 #include <cctype>
 #include <stdexcept>
 #include <utility>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <system_error>
 #include <vector>
 
 #include <JlCompress.h>
+#include <fmt/format.h>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -29,6 +33,7 @@
 
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
+#include "common/common_types.h"
 
 namespace FritchiiUi {
 namespace {
@@ -90,16 +95,58 @@ fs::path Backup(const fs::path& root) {
     return target;
 }
 
-/// Each game's saves from `from` into `to`, replacing that game's saves there. When both sides
-/// have one user profile, the profile ids may differ (each install makes its own): the saves go
-/// into the target's profile. Returns how many games were copied.
+/// The user profiles an install really has, as save folder names, from its
+/// <nand>/system/save/8000000000000010/su/avators/profiles.dat (8 users of 0xC8 bytes after a
+/// 0x10 header; a user's id is 16 bytes, written as its high then low 64-bit half in hex).
+std::vector<std::string> SystemProfiles(const fs::path& save_root) {
+    // save_root: <nand>/user/save/0000000000000000
+    const fs::path nand = save_root.parent_path().parent_path().parent_path();
+    std::ifstream file(nand / "system" / "save" / "8000000000000010" / "su" / "avators" /
+                           "profiles.dat",
+                       std::ios::binary);
+    std::vector<char> data((std::istreambuf_iterator<char>(file)), {});
+    std::vector<std::string> ids;
+    for (std::size_t offset = 0x10; offset + 0xC8 <= data.size(); offset += 0xC8) {
+        u64 low{};
+        u64 high{};
+        std::memcpy(&low, data.data() + offset, sizeof(low));
+        std::memcpy(&high, data.data() + offset + 8, sizeof(high));
+        if (low != 0 || high != 0) {
+            ids.push_back(fmt::format("{:016X}{:016X}", high, low));
+        }
+    }
+    return ids;
+}
+
+/// Each game's saves from `from` into `to`, replacing that game's saves there. Each install
+/// makes its own user profile, so the saves go into the profile the target really has (its
+/// profiles.dat): v5.8.3 kept the source's folder name when the target had no saves yet, and the
+/// game never saw them ("Orphaned Profiles Detected", 2026-11-11). Returns how many games.
 int CopySaves(const fs::path& from, const fs::path& to) {
-    const auto sources = Profiles(from);
-    const auto targets = Profiles(to);
+    auto sources = Profiles(from);
+    const auto users = SystemProfiles(to);
+    // With several source profiles, the one the source install's first user owns goes last, so
+    // its saves win where both have the same game.
+    if (const auto source_users = SystemProfiles(from); !source_users.empty()) {
+        std::ranges::stable_partition(sources, [&](const fs::path& p) {
+            return p.filename().string() != source_users.front();
+        });
+    }
+    const auto target_profile = [&](const fs::path& source) {
+        if (users.empty()) {
+            return to / source.filename(); // no profile file: keep the folder as it was
+        }
+        // The target user with saves already, else its first user.
+        for (const auto& id : users) {
+            if (fs::is_directory(to / id)) {
+                return to / id;
+            }
+        }
+        return to / users.front();
+    };
     int games = 0;
     for (const auto& source : sources) {
-        const fs::path profile =
-            sources.size() == 1 && targets.size() == 1 ? targets[0] : to / source.filename();
+        const fs::path profile = target_profile(source);
         fs::create_directories(profile);
         for (const auto& game : fs::directory_iterator(source)) {
             if (!game.is_directory()) {
@@ -291,9 +338,67 @@ void ShowSavesWindow(QWidget* parent, const std::function<bool()>& emulation_run
         }
     });
 
+    // v5.8.4: saves in a profile folder Fritchii has no user for (v5.8.3's copy left some there:
+    // "Orphaned Profiles Detected") go into its user's profile.
+    const auto orphans = [&] {
+        const auto users = SystemProfiles(fritchii);
+        std::vector<fs::path> result;
+        if (users.empty()) {
+            return result;
+        }
+        for (const auto& profile : Profiles(fritchii)) {
+            if (std::ranges::find(users, profile.filename().string()) == users.end()) {
+                result.push_back(profile);
+            }
+        }
+        return result;
+    };
+    int row = 3;
+    if (!orphans().empty()) {
+        auto* fix_button = new QPushButton(QObject::tr("Fix"), &dialog);
+        layout->addWidget(new QLabel(QObject::tr("Saves that don't show up in the game"), &dialog),
+                          row, 0);
+        layout->addWidget(fix_button, row, 1);
+        ++row;
+        QObject::connect(fix_button, &QPushButton::clicked, &dialog, [&, fix_button] {
+            if (blocked()) {
+                return;
+            }
+            try {
+                const auto backup = Backup(fritchii);
+                const auto users = SystemProfiles(fritchii);
+                fs::path user = fritchii / users.front();
+                for (const auto& id : users) {
+                    if (fs::is_directory(fritchii / id)) {
+                        user = fritchii / id;
+                        break;
+                    }
+                }
+                fs::create_directories(user);
+                int games = 0;
+                for (const auto& orphan : orphans()) {
+                    for (const auto& game : fs::directory_iterator(orphan)) {
+                        if (!game.is_directory()) {
+                            continue;
+                        }
+                        const auto target = user / game.path().filename();
+                        fs::remove_all(target);
+                        fs::copy(game.path(), target, fs::copy_options::recursive);
+                        ++games;
+                    }
+                    fs::remove_all(orphan); // copied above, and in the backup
+                }
+                fix_button->setEnabled(false);
+                Done(&dialog, games, backup);
+            } catch (const std::exception& error) {
+                failed(error);
+            }
+        });
+    }
+
     auto* close = new QPushButton(QObject::tr("Close"), &dialog);
     QObject::connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
-    layout->addWidget(close, 3, 1);
+    layout->addWidget(close, row, 1);
     dialog.exec();
 }
 
