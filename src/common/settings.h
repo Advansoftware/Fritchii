@@ -437,7 +437,9 @@ struct Values {
     // or FSR 4 in place of the game's upscale pass (video_core/ocarina_upscale.h; FSR 4 needs
     // AMD's downloaded runtime and falls back to FSR 3.1). NVIDIA DLSS keeps its own setting and,
     // when on, still replaces Game and No sharpening; an FSR choice wins over it.
-    SwitchableSetting<OotAntiAliasing> oot_anti_aliasing{linkage, OotAntiAliasing::Game,
+    // Automatic: Game where the GPU runs tensor operations natively (RTX), No sharpening elsewhere
+    // (GTX 10 and older emulate the network's matrices in the shader, too slow every frame).
+    SwitchableSetting<OotAntiAliasing> oot_anti_aliasing{linkage, OotAntiAliasing::Automatic,
                                                          "oot_anti_aliasing", Category::Renderer};
     // The title screen's and cutscenes' videos (AV1 1080p60): the game's own upscaler (removes
     // banding, 1080p -> 1440p; tensor operations) or a bilinear copy. Automatic: the game's where

@@ -27,5 +27,13 @@ TEST_CASE("Ocarina of Time network bypass follows the setting and the game",
     CHECK(BypassEnabled(ProgramId));
     CHECK_FALSE(BypassEnabled(0x0400C3F00006E000ULL));
 
+    setting.SetValue(Settings::OotAntiAliasing::Automatic);
+    CHECK(BypassEnabled(ProgramId, false));
+    CHECK_FALSE(BypassEnabled(ProgramId, true));
+    CHECK_FALSE(BypassEnabled(0x0400C3F00006E000ULL, false));
+
+    setting.SetValue(Settings::OotAntiAliasing::Fsr3);
+    CHECK_FALSE(BypassEnabled(ProgramId, false));
+
     setting.SetValue(previous);
 }

@@ -9,6 +9,7 @@
 #include "common/common_types.h"
 #include "common/settings.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/nx2_perf.h"
 
 // The Legend of Zelda: Ocarina of Time's anti-aliasing. After tonemapping, the game runs a
 // single-frame tensor network on the tonemapped image and an output pass that sharpens the result
@@ -48,9 +49,25 @@ struct BypassState {
     std::atomic<bool> output_replaced{}; ///< the latest output pass was replaced
 };
 
+/// Automatic: the network runs only where tensor operations are native; emulated, its matrices
+/// cost tens of milliseconds a frame (GTX 10 series and older).
+inline bool BypassEnabled(u64 program_id, bool native_tensor_ops) {
+    if (program_id != ProgramId) {
+        return false;
+    }
+    switch (Settings::values.oot_anti_aliasing.GetValue()) {
+    case Settings::OotAntiAliasing::NoSharpening:
+        return true;
+    case Settings::OotAntiAliasing::Automatic:
+        return !native_tensor_ops;
+    default:
+        return false;
+    }
+}
+
 inline bool BypassEnabled(u64 program_id) {
-    return program_id == ProgramId &&
-           Settings::values.oot_anti_aliasing.GetValue() == Settings::OotAntiAliasing::NoSharpening;
+    return BypassEnabled(program_id,
+                         Nx2Perf::g_native_tensor_ops.load(std::memory_order_relaxed));
 }
 
 } // namespace VideoCommon::OotNetwork

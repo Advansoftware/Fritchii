@@ -179,7 +179,8 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "on GPUs that emulate its math.\nBilinear: a plain, fast stretch.\nAutomatic: the "
               "game's upscaler where the GPU runs it natively, bilinear elsewhere."));
     INSERT(Settings, oot_anti_aliasing, tr("Ocarina of Time anti-aliasing:"),
-           tr("The Legend of Zelda: Ocarina of Time only.\nGame: the game's own anti-aliasing "
+           tr("The Legend of Zelda: Ocarina of Time only.\nAutomatic: Game on GPUs that run its "
+              "network natively (RTX), No sharpening elsewhere.\nGame: the game's own anti-aliasing "
               "network, which sharpens heavily.\nNo sharpening: the image as the game renders it, "
               "without the network (faster; pairs well with a higher resolution).\nAMD FSR 3.1: "
               "AMD's upscaler in place of the game's, on any GPU. RCAS Sharpness sets its "
@@ -622,6 +623,7 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
                           }});
     translations->insert({Settings::EnumMetadata<Settings::OotAntiAliasing>::Index(),
                           {
+                              PAIR(OotAntiAliasing, Automatic, tr("Automatic")),
                               PAIR(OotAntiAliasing, Game, tr("Game")),
                               PAIR(OotAntiAliasing, NoSharpening, tr("No sharpening")),
                               PAIR(OotAntiAliasing, Fsr3, tr("AMD FSR 3.1")),
