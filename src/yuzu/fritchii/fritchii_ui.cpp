@@ -604,7 +604,10 @@ QStringList OcarinaGameOverrides() {
     const QString suffix = QStringLiteral("\\use_global=false");
     while (!file.atEnd()) {
         const QString line = QString::fromUtf8(file.readLine()).trimmed();
-        if (line.endsWith(suffix)) {
+        // The memory layout is Fritchii's own while a Switch 2 game runs (12 GB, core.cpp), and
+        // saving Game Settings during play could store it as OoT's: never the player's choice,
+        // so it doesn't count (players read the banner as "my settings changed", 2026-11-11).
+        if (line.endsWith(suffix) && !line.contains(QStringLiteral("memory_layout_mode"))) {
             names << line.chopped(suffix.size());
         }
     }
