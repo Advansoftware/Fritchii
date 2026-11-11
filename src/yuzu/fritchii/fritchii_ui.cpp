@@ -36,6 +36,7 @@
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "frontend_common/profile_import.h"
+#include "yuzu/fritchii/saves_window.h"
 #include "yuzu/user_data_migration.h"
 #include "common/logging.h"
 #include "common/scm_rev.h"
@@ -281,6 +282,13 @@ void RestructureMenus(Ui::MainWindow& ui, QMainWindow& window, const MenuHooks& 
     auto* copy_data = new QAction(tr("&Copy Data from Eden or Lichii..."), &window);
     QObject::connect(copy_data, &QAction::triggered, &window, [&window] { CopyDataFromOldFolder(window); });
     ui.menu_Help->insertAction(first_help, copy_data);
+    // v5.8.3: export, import and copy saves between Fritchii, Eden and Lichii.
+    auto* saves = new QAction(tr("Sa&ves..."), &window);
+    QObject::connect(saves, &QAction::triggered, &window, [&window] {
+        ShowSavesWindow(&window,
+                        [] { return QtCommon::system && QtCommon::system->IsPoweredOn(); });
+    });
+    ui.menu_Help->insertAction(copy_data, saves);
 
     // Plain names.
     ui.menu_recent_files->setTitle(tr("Open &Recent"));

@@ -24,6 +24,7 @@
 
 #include "qt_common/game_list/game_list_p.h"
 #include "yuzu/fritchii/fritchii_ui.h"
+#include "yuzu/fritchii/saves_window.h"
 
 namespace FritchiiUi {
 namespace {
@@ -278,6 +279,16 @@ QWidget* Home::MakePage() {
         connect(button, &QPushButton::clicked, this, [open] { open(); });
         return button;
     };
+    // v5.8.3: the Saves window (export, import, copy between Fritchii, Eden and Lichii).
+    auto* saves = new QPushButton(Icon(QStringLiteral("list"), 18), tr("Saves"), page);
+    saves->setObjectName(QStringLiteral("FritchiiLink"));
+    saves->setIconSize(QSize(18, 18));
+    saves->setCursor(Qt::PointingHandCursor);
+    saves->setFocusPolicy(Qt::NoFocus);
+    connect(saves, &QPushButton::clicked, this, [this] {
+        ShowSavesWindow(window, hooks.emulation_running);
+    });
+    links->addWidget(saves);
     links->addWidget(link(QStringLiteral("community"), tr("Discord"), &OpenDiscord));
     links->addWidget(link(QStringLiteral("heart"), tr("Donate"), &OpenDonate));
     layout->addLayout(links);
