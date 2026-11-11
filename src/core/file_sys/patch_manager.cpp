@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <utility>
 #include <algorithm>
 #include <span>
 #include <array>
@@ -16,6 +17,7 @@
 
 #include "common/assert.h"
 #include "common/hex_util.h"
+#include "common/host_video_memory.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #ifndef _WIN32
@@ -240,6 +242,23 @@ constexpr std::string_view WATER_RIPPLE_NAME = "Water ripples at any frame rate 
 constexpr std::string_view DYNAMIC_FPS_NAME = "Dynamic FPS by Dark (built-in)";
 constexpr std::string_view HIGH_REFRESH_NAME = "High refresh rate (built-in, experimental)";
 
+// Max Resolution turns the game's dynamic resolution off, so the 3D stays at 1440p docked. A
+// small card (GTX 1650, 4 GB) then spends 36 ms a frame at the 90th percentile: there the game
+// keeps its own controller. EDEN_NX2_NO_MAX_RES=0 applies the patch anyway.
+bool MaxResolutionFits() {
+    if (const char* const value = std::getenv("EDEN_NX2_NO_MAX_RES"); value && *value == '0') {
+        return true;
+    }
+    const bool small = Common::HostHasSmallVideoMemory();
+    static bool logged{};
+    if (small && !std::exchange(logged, true)) {
+        LOG_INFO(Loader, "Max Resolution (built-in) left out: {} MiB of video memory, the game "
+                         "keeps its dynamic resolution",
+                 Common::HostDedicatedVideoMemory() >> 20);
+    }
+    return !small;
+}
+
 bool HighRefreshSettingOn() {
     // Tests boot either way without touching the player's config: EDEN_NX2_OOT_HIGH_REFRESH=0/1.
     if (const char* const value = std::getenv("EDEN_NX2_OOT_HIGH_REFRESH"); value && *value) {
@@ -286,6 +305,7 @@ constexpr std::array BUILTIN_PATCHES{
         .build_id = "E0F3CCFAF50065AE4EA01EB5AEB13B1A45DA3348",
         .records = MAX_RESOLUTION_RECORDS,
         .disable_env = "EDEN_NX2_NO_MAX_RES",
+        .setting_enabled = &MaxResolutionFits,
     },
     // Before Dark's: it contains his routine and replaces it while applied. Off by default; only
     // listed in Add-Ons while the setting is on.
