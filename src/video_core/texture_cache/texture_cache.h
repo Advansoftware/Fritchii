@@ -22,6 +22,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "common/alignment.h"
+#include "common/host_video_memory.h"
 #include "common/memory_detect.h"
 #include "common/memory_detect.h"
 #include "common/scope_exit.h"
@@ -144,6 +145,17 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
         swizzle_chunk_size = 0;
         swizzle_slices_per_batch = 0;
     }
+}
+
+/// EDEN_NX2_ASYNC_RELAXED (1 = on, 0 = off; on by default on small cards only, see
+/// Common::HostHasSmallVideoMemory): relocated targets keep their clear history and a clear one
+/// render frame back counts, for the asynchronous shaders' skip rule.
+[[nodiscard]] inline bool AsyncRelaxedTargets() {
+    static const bool relaxed = [] {
+        const char* value = std::getenv("EDEN_NX2_ASYNC_RELAXED");
+        return value != nullptr ? value[0] != '0' : Common::HostHasSmallVideoMemory();
+    }();
+    return relaxed;
 }
 
 template <class P>
@@ -531,6 +543,9 @@ void TextureCache<P>::TickFrame() {
             }
             if (native_thresholds_applied && budget_check_frames++ % 30 == 0) {
                 const u64 budget = runtime.GetDeviceMemoryBudget();
+                if constexpr (requires { runtime.NoteBudgetPressure(u64{}, u64{}); }) {
+                    runtime.NoteBudgetPressure(runtime.GetDeviceMemoryUsage(), budget);
+                }
                 if (budget > 2_GiB) {
                     const u64 old_critical = critical_memory;
                     const u64 margin = (std::min)(budget / 8, 1_GiB);
@@ -574,14 +589,14 @@ void TextureCache<P>::TickFrame() {
                                    ? std::optional<u64>{std::strtoull(value, nullptr, 10) << 20}
                                    : std::nullopt;
                     }();
-                    const u64 image_floor =
-                        forced_floor.value_or((std::min)(budget / 2, u64{1536_MiB}));
+                    // Small cards only: larger ones keep their thresholds as they were.
+                    const u64 image_floor = forced_floor.value_or(
+                        budget < 5_GiB ? (std::min)(budget / 2, u64{1536_MiB}) : u64{0});
                     if (image_floor != 0) {
                         u64 image_bytes{};
+                        // The host's bytes: ASTC re-compressed to BC takes 2-4 times the guest's.
                         for (const auto [image_id, image] : slot_images) {
-                            if (False(image->flags & ImageFlagBits::Unbacked)) {
-                                image_bytes += GetScaledImageSizeBytes(*image);
-                            }
+                            image_bytes += ImageMemoryBytes(*image);
                         }
                         const u64 other = total_used_memory - (std::min)(total_used_memory, image_bytes);
                         const u64 floor_expected = other + image_floor;
@@ -3397,6 +3412,8 @@ u64 TextureCache<P>::ImageMemoryBytes(const Image& image) const {
         True(image.flags & ImageFlagBits::Converted)) {
         tentative_size = TranscodedAstcSize(tentative_size, image.info.format);
     }
+    // Each top level the host leaves out (TrimmedLevels) held about 3/4 of what was left.
+    tentative_size >>= 2 * image.host_level_offset;
     return Common::AlignUp(tentative_size, 1024);
 }
 
@@ -5005,10 +5022,16 @@ void TextureCache<P>::RelocateImage(ImageId image_id, GPUVAddr gpu_addr, DAddr c
     image.flags |= ImageFlagBits::CpuModified;
     image.last_write_frame = ~u64{0};
     image.relocation_guard_noted = 0;
-    // A new target to the asynchronous shaders' skip rule too: its draws wait until it was
-    // cleared at this address in two render frames (ClassifyDrawTargets).
-    image.last_clear_frame = ~u64{0};
-    image.previous_clear_frame = ~u64{0};
+    // To the asynchronous shaders' skip rule it was a new target: its draws waited until it was
+    // cleared at this address in two render frames (ClassifyDrawTargets). Ocarina of Time moves
+    // its per-frame targets all the time (~1000 relocations per 600 frames), so their draws
+    // waited for unbuilt pipelines (300 ms a fragment library on a GTX 1650): 1-1.5 s of held
+    // draws per 10 s in new areas. The image is the same per-frame target a clear overwrites
+    // whole, so it keeps its clear history. EDEN_NX2_ASYNC_RELAXED=0 restores the reset.
+    if (!AsyncRelaxedTargets()) {
+        image.last_clear_frame = ~u64{0};
+        image.previous_clear_frame = ~u64{0};
+    }
     image.drawn_since_clear = false;
     // 5. Page tables, map view, page filter, LRU.
     RegisterImage(image_id);
@@ -5765,10 +5788,31 @@ DrawTargets TextureCache<P>::ClassifyDrawTargets() {
             image = &slot_images[image_id];
         }
         // Not registered yet: the draw is the first use of the target.
+        // A render-frame tick between a target's clear and its draws made a per-frame target
+        // look persistent (its clear was in the frame before): with EDEN_NX2_ASYNC_RELAXED (on
+        // by default) a clear one render frame back counts as this frame's.
+        u64 clear_frame = render_frame;
+        if (image && AsyncRelaxedTargets() && image->last_clear_frame + 1 == render_frame) {
+            clear_frame = image->last_clear_frame;
+        }
         const DrawTargetClass kind =
             image ? ClassifyClearedTarget(image->last_clear_frame, image->previous_clear_frame,
-                                          render_frame)
+                                          clear_frame)
                   : DrawTargetClass::FirstTime;
+        if (image && kind != DrawTargetClass::Recurring && AsyncRelaxedTargets()) {
+            static std::atomic<u32> logged{};
+            if (logged.fetch_add(1, std::memory_order_relaxed) < 48) {
+                const auto age = [render_frame](u64 frame) {
+                    return frame == ~u64{0} ? s64{-1} : static_cast<s64>(render_frame - frame);
+                };
+                LOG_INFO(HW_GPU,
+                         "Async target not recurring: {:#x} {}x{} format {} class {}, last clear "
+                         "{} render frames ago, the one before {} (-1 = never)",
+                         gpu_addr, image->info.size.width, image->info.size.height,
+                         static_cast<u32>(image->info.format), static_cast<u32>(kind),
+                         age(image->last_clear_frame), age(image->previous_clear_frame));
+            }
+        }
         if (kind > result.kind) {
             result = DrawTargets{
                 .kind = kind,
