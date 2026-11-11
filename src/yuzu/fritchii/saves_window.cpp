@@ -82,16 +82,20 @@ std::vector<fs::path> Profiles(const fs::path& root) {
     return result;
 }
 
-/// Copies `root` to <nand>/user/save-backups/<time> before it changes. Empty when there was
-/// nothing to keep.
-fs::path Backup(const fs::path& root) {
-    if (Profiles(root).empty()) {
-        return {};
-    }
+/// Where the saves under `root` are backed up before a change: <nand>/user/save-backups/<time>.
+/// Picked before asking, so the question can say where (the owner, 2026-11-11: always back up,
+/// and say where).
+fs::path BackupPath(const fs::path& root) {
     const auto stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
-    const auto target = root.parent_path().parent_path() / "save-backups" / stamp.toStdString();
-    fs::create_directories(target.parent_path());
-    fs::copy(root, target, fs::copy_options::recursive);
+    return root.parent_path().parent_path() / "save-backups" / stamp.toStdString();
+}
+
+/// Copies `root` to `target` (always made, even when there were no saves yet).
+fs::path Backup(const fs::path& root, const fs::path& target) {
+    fs::create_directories(target);
+    if (fs::is_directory(root)) {
+        fs::copy(root, target, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+    }
     return target;
 }
 
@@ -170,16 +174,12 @@ QString TestFile() {
 void Done(QWidget* parent, int games, const fs::path& backup) {
     QString text = games == 1 ? QObject::tr("Done: the saves of 1 game were copied.")
                               : QObject::tr("Done: the saves of %1 games were copied.").arg(games);
-    if (!backup.empty()) {
-        text += QObject::tr("\n\nThe saves that were there before are in:\n%1").arg(Text(backup));
-    }
+    text += QObject::tr("\n\nThe saves that were there before are backed up in:\n%1")
+                .arg(Text(backup));
     QMessageBox box(QMessageBox::Information, QObject::tr("Saves"), text, QMessageBox::Ok, parent);
-    QAbstractButton* open = nullptr;
-    if (!backup.empty()) {
-        open = box.addButton(QObject::tr("Open backup"), QMessageBox::ActionRole);
-    }
+    QAbstractButton* open = box.addButton(QObject::tr("Open backup"), QMessageBox::ActionRole);
     box.exec();
-    if (open && box.clickedButton() == open) {
+    if (box.clickedButton() == open) {
         QDesktopServices::openUrl(QUrl::fromLocalFile(Text(backup)));
     }
 }
@@ -212,6 +212,13 @@ void ShowSavesWindow(QWidget* parent, const std::function<bool()>& emulation_run
                                  .arg(QString::fromUtf8(error.what())));
     };
     const fs::path fritchii = places.front().root;
+    // Every change backs up first and says where, before and after (the owner, 2026-11-11).
+    const auto confirm = [&](const QString& question, const fs::path& backup_path) {
+        return QMessageBox::question(
+                   &dialog, QObject::tr("Saves"),
+                   question + QObject::tr("\n\nThe saves there now are backed up first, in:\n%1")
+                                  .arg(Text(backup_path))) == QMessageBox::Yes;
+    };
 
     auto* export_button = new QPushButton(QObject::tr("Export..."), &dialog);
     layout->addWidget(new QLabel(QObject::tr("Your saves to a .zip file"), &dialog), 0, 0);
@@ -275,7 +282,14 @@ void ShowSavesWindow(QWidget* parent, const std::function<bool()>& emulation_run
             if (Profiles(root).empty()) {
                 throw std::runtime_error("no saves in that zip file");
             }
-            const auto backup = Backup(fritchii);
+            const auto backup_path = BackupPath(fritchii);
+            if (!confirm(QObject::tr("Import these saves into Fritchii? The games' saves in "
+                                     "Fritchii are replaced."),
+                         backup_path)) {
+                fs::remove_all(temp);
+                return;
+            }
+            const auto backup = Backup(fritchii, backup_path);
             const int games = CopySaves(root, fritchii);
             fs::remove_all(temp);
             Done(&dialog, games, backup);
@@ -321,16 +335,17 @@ void ShowSavesWindow(QWidget* parent, const std::function<bool()>& emulation_run
             return;
         }
         QString question = QObject::tr("Copy the saves from %1 to %2? The games' saves in %2 "
-                                       "are replaced; a backup of them is kept.")
+                                       "are replaced.")
                                .arg(source.name, target.name);
         if (target.name != QStringLiteral("Fritchii")) {
-            question += QObject::tr("\n\nClose %1 first.").arg(target.name);
+            question += QObject::tr(" Close %1 first.").arg(target.name);
         }
-        if (QMessageBox::question(&dialog, QObject::tr("Saves"), question) != QMessageBox::Yes) {
+        const auto backup_path = BackupPath(target.root);
+        if (!confirm(question, backup_path)) {
             return;
         }
         try {
-            const auto backup = Backup(target.root);
+            const auto backup = Backup(target.root, backup_path);
             const int games = CopySaves(source.root, target.root);
             Done(&dialog, games, backup);
         } catch (const std::exception& error) {
@@ -364,8 +379,14 @@ void ShowSavesWindow(QWidget* parent, const std::function<bool()>& emulation_run
             if (blocked()) {
                 return;
             }
+            const auto backup_path = BackupPath(fritchii);
+            if (!confirm(QObject::tr("Move the saves that don't show up into your Fritchii "
+                                     "profile?"),
+                         backup_path)) {
+                return;
+            }
             try {
-                const auto backup = Backup(fritchii);
+                const auto backup = Backup(fritchii, backup_path);
                 const auto users = SystemProfiles(fritchii);
                 fs::path user = fritchii / users.front();
                 for (const auto& id : users) {
