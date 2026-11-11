@@ -28,6 +28,14 @@
 #include <QProgressDialog>
 #include <QRadioButton>
 #include <QThread>
+#include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QLabel>
+#include <QLocale>
+#include <QStringList>
+#include <QVBoxLayout>
+#include <sstream>
 #include <QDesktopServices>
 #include <QUrl>
 #include <array>
@@ -40,7 +48,9 @@ UserDataMigrator::UserDataMigrator(QMainWindow* main_window) {
 
     // Help > Copy Data from Eden or Lichii (v5.8.1) left a request and restarted Fritchii.
     if (const auto request = FrontendCommon::TakeProfileImportRequest(); !request.empty()) {
-        AutoImport(main_window, request);
+        if (const auto choice = ProfileImportChoice::Parse(request)) {
+            AutoImport(main_window, choice);
+        }
         return;
     }
     if (!FrontendCommon::NeedsLegacyProfileImport()) {
@@ -267,9 +277,23 @@ fs::file_time_type LastSaved(const fs::path& user, const fs::path& config) {
     return newest != fs::file_time_type::min() ? newest : LastUsed(config);
 }
 
-/// The newer of Eden and Lichii by their newest saves, then the newest of the older emulators.
-/// `only`: that folder only ("eden" or "lichii", Help > Copy Data from Eden or Lichii).
+/// Every old profile folder there is, the one to suggest first: the newer of Eden and Lichii
+/// by their newest saves, then the newest of the older emulators.
+std::vector<OldProfile> ListOldProfiles();
+
+/// The suggested old profile, or the one in `only` ("eden", "lichii"...).
 std::optional<OldProfile> PickOldProfile(const std::string& only = {}) {
+    const auto all = ListOldProfiles();
+    for (const auto& profile : all) {
+        if (only.empty() ||
+            Common::FS::PathToUTF8String(profile.user.filename()) == only) {
+            return profile;
+        }
+    }
+    return std::nullopt;
+}
+
+std::vector<OldProfile> ListOldProfiles() {
     using namespace Common::FS;
     struct Candidate {
         const char* name;
@@ -285,24 +309,35 @@ std::optional<OldProfile> PickOldProfile(const std::string& only = {}) {
         Candidate{QT_TR_NOOP("Suyu"), SuyuDir, SuyuConfigDir, 1},
         Candidate{QT_TR_NOOP("Yuzu"), YuzuDir, YuzuConfigDir, 1},
     };
-    std::optional<OldProfile> best;
-    int best_rank = 3;
+    std::vector<std::pair<int, OldProfile>> found;
     for (const auto& candidate : candidates) {
         const auto& user = GetLegacyPath(candidate.user);
-        if (!fs::is_directory(user) ||
-            (!only.empty() && PathToUTF8String(user.filename()) != only)) {
+        if (!fs::is_directory(user)) {
             continue;
         }
         const auto& config = GetLegacyPath(candidate.config);
-        OldProfile profile{QObject::tr(candidate.name), user, config,
-                           fs::exists(config / "frizti.ini"), LastSaved(user, config)};
-        const int rank = candidate.rank;
-        if (!best || rank < best_rank || (rank == best_rank && profile.used > best->used)) {
-            best = profile;
-            best_rank = rank;
-        }
+        found.emplace_back(candidate.rank,
+                           OldProfile{QObject::tr(candidate.name), user, config,
+                                      fs::exists(config / "frizti.ini"), LastSaved(user, config)});
     }
-    return best;
+    std::ranges::stable_sort(found, [](const auto& a, const auto& b) {
+        return a.first != b.first ? a.first < b.first : a.second.used > b.second.used;
+    });
+    std::vector<OldProfile> result;
+    for (auto& [rank, profile] : found) {
+        result.push_back(std::move(profile));
+    }
+    return result;
+}
+
+QString LastPlayedText(fs::file_time_type time) {
+    if (time == fs::file_time_type::min()) {
+        return {};
+    }
+    const auto system = std::chrono::clock_cast<std::chrono::system_clock>(time);
+    const auto seconds =
+        std::chrono::duration_cast<std::chrono::seconds>(system.time_since_epoch()).count();
+    return QLocale().toString(QDateTime::fromSecsSinceEpoch(seconds).date(), QLocale::ShortFormat);
 }
 
 std::uintmax_t FolderSize(const fs::path& path) {
@@ -330,7 +365,7 @@ struct ImportPlan {
 /// Settings, keys, mods, saves and the small user folders are copied; caches, logs, dumps and
 /// screenshots are not (shaders are prepared again on the first boot). nand and sdmc are linked
 /// instead when copying them would not fit.
-ImportPlan PlanImport(const OldProfile& old) {
+ImportPlan PlanImport(const OldProfile& old, const ProfileImportChoice& choice) {
     using namespace Common::FS;
     ImportPlan result;
     result.plan.strategy = Migration::Strategy::Copy;
@@ -345,10 +380,20 @@ ImportPlan PlanImport(const OldProfile& old) {
         fs::remove(target, ec); // an empty folder made before the import, not a backup
         result.plan.roots.push_back({source, target, strategy});
     };
-    add(old.config, GetEdenPath(EdenPath::ConfigDir));
-    for (const char* name : {KEYS_DIR, LOAD_DIR, AMIIBO_DIR, PLAY_TIME_DIR, TAS_DIR, ICONS_DIR,
-                             POST_SHADER_DIR, POST_PRESET_DIR, LOSSLESS_DIR, STREAMLINE_DIR,
-                             FIDELITYFX_DIR}) {
+    // v5.8.2: only the parts the player ticked (mods are off unless ticked).
+    std::vector<const char*> folders;
+    if (choice.settings) {
+        add(old.config, GetEdenPath(EdenPath::ConfigDir));
+        folders.insert(folders.end(), {TAS_DIR, ICONS_DIR, POST_SHADER_DIR, POST_PRESET_DIR,
+                                       LOSSLESS_DIR, STREAMLINE_DIR, FIDELITYFX_DIR});
+    }
+    if (choice.saves) {
+        folders.insert(folders.end(), {KEYS_DIR, AMIIBO_DIR, PLAY_TIME_DIR});
+    }
+    if (choice.mods) {
+        folders.push_back(LOAD_DIR);
+    }
+    for (const char* name : folders) {
         if (old.user / name != old.config) {
             add(old.user / name, destination / name);
         }
@@ -362,7 +407,7 @@ ImportPlan PlanImport(const OldProfile& old) {
     free_bytes = free_bytes > result.copy_bytes ? free_bytes - result.copy_bytes : 0;
     for (const char* name : {NAND_DIR, SDMC_DIR}) {
         const auto source = old.user / name;
-        if (!fs::is_directory(source)) {
+        if (!choice.saves || !fs::is_directory(source)) {
             continue;
         }
         const auto size = FolderSize(source);
@@ -380,7 +425,102 @@ ImportPlan PlanImport(const OldProfile& old) {
 
 } // namespace
 
-void UserDataMigrator::AutoImport(QMainWindow* main_window, const std::string& only) {
+std::string ProfileImportChoice::Serialize() const {
+    return folder + "\nsaves=" + (saves ? "1" : "0") + "\nsettings=" + (settings ? "1" : "0") +
+           "\nmods=" + (mods ? "1" : "0") + "\n";
+}
+
+std::optional<ProfileImportChoice> ProfileImportChoice::Parse(const std::string& text) {
+    ProfileImportChoice choice;
+    std::istringstream in{text};
+    std::string line;
+    if (!std::getline(in, choice.folder) || choice.folder.empty() ||
+        choice.folder.find_first_of("/\\.") != std::string::npos) {
+        return std::nullopt;
+    }
+    // A v5.8.1 request names the folder only: everything as then, mods included.
+    choice.mods = true;
+    while (std::getline(in, line)) {
+        const auto value = line.size() > 2 && line.back() == '1';
+        if (line.starts_with("saves=")) {
+            choice.saves = value;
+        } else if (line.starts_with("settings=")) {
+            choice.settings = value;
+        } else if (line.starts_with("mods=")) {
+            choice.mods = value;
+        }
+    }
+    return choice;
+}
+
+std::optional<ProfileImportChoice> UserDataMigrator::AskImport(QWidget* parent, bool from_menu) {
+    const auto profiles = ListOldProfiles();
+    if (profiles.empty()) {
+        return std::nullopt;
+    }
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QStringLiteral("Fritchii"));
+    dialog.setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setSpacing(12);
+    QFont big = dialog.font();
+    big.setPointSizeF(big.pointSizeF() * 1.15);
+    auto* text = new QLabel(
+        from_menu ? QObject::tr("Copy your data from another folder?\nFritchii restarts and "
+                                "copies it over its own. What it has now is kept as a backup.")
+                  : QObject::tr("Fritchii keeps its data in its own folder now.\nCopy your data "
+                                "from another emulator folder?"),
+        &dialog);
+    text->setFont(big);
+    layout->addWidget(text);
+    auto* source = new QComboBox(&dialog);
+    source->setFont(big);
+    for (const auto& profile : profiles) {
+        const QString name =
+            QString::fromStdString(Common::FS::PathToUTF8String(profile.user.filename()));
+        const QString played = LastPlayedText(profile.used);
+        source->addItem(played.isEmpty() ? name
+                                         : QObject::tr("%1 (last played %2)").arg(name, played),
+                        name);
+    }
+    layout->addWidget(source);
+    const auto check = [&](const QString& label, bool on) {
+        auto* box = new QCheckBox(label, &dialog);
+        box->setFont(big);
+        box->setChecked(on);
+        layout->addWidget(box);
+        return box;
+    };
+    auto* saves = check(QObject::tr("Saves and keys"), true);
+    auto* settings = check(QObject::tr("Settings"), true);
+    auto* mods = check(QObject::tr("Mods"), false);
+    auto* buttons = new QDialogButtonBox(&dialog);
+    auto* copy = buttons->addButton(QObject::tr("Copy"), QDialogButtonBox::AcceptRole);
+    buttons->addButton(from_menu ? QObject::tr("Cancel") : QObject::tr("Start fresh"),
+                       QDialogButtonBox::RejectRole);
+    copy->setDefault(true);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    const auto update = [=] {
+        copy->setEnabled(saves->isChecked() || settings->isChecked() || mods->isChecked());
+    };
+    for (auto* box : {saves, settings, mods}) {
+        QObject::connect(box, &QCheckBox::toggled, &dialog, update);
+    }
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted) {
+        return std::nullopt;
+    }
+    return ProfileImportChoice{
+        .folder = source->currentData().toString().toStdString(),
+        .saves = saves->isChecked(),
+        .settings = settings->isChecked(),
+        .mods = mods->isChecked(),
+    };
+}
+
+void UserDataMigrator::AutoImport(QMainWindow* main_window,
+                                  std::optional<ProfileImportChoice> request) {
     using namespace Common::FS;
     const auto state_dir = FrontendCommon::ProfileImportStateDirectory();
     const auto& destination = GetEdenPath(EdenPath::EdenDir);
@@ -391,12 +531,18 @@ void UserDataMigrator::AutoImport(QMainWindow* main_window, const std::string& o
     // Fritchii data that is already there (copied by hand, or an earlier import) is kept as is,
     // unless the player asked for a copy (Help > Copy Data from Eden or Lichii): then RunImport
     // keeps it in backup folders beside the new copy.
-    const bool requested = !only.empty();
+    const bool requested = request.has_value();
     if (!requested && fs::exists(GetEdenPath(EdenPath::ConfigDir) / "qt-config.ini")) {
         Migration::MarkFresh(state_dir);
         return;
     }
-    const auto old = PickOldProfile(only);
+    // v5.8.2: the first launch asks before copying anything.
+    const auto choice = requested ? request : AskImport(main_window, false);
+    if (!choice) {
+        Migration::MarkFresh(state_dir); // Help > Copy Data can still copy later
+        return;
+    }
+    const auto old = PickOldProfile(choice->folder);
     if (!old) {
         Migration::MarkFresh(state_dir);
         return;
@@ -471,7 +617,7 @@ void UserDataMigrator::AutoImport(QMainWindow* main_window, const std::string& o
         progress->deleteLater();
     };
 
-    const ImportPlan import = PlanImport(*old);
+    const ImportPlan import = PlanImport(*old, *choice);
     if (import.plan.roots.empty()) {
         Migration::MarkFresh(state_dir);
         return;
@@ -487,10 +633,21 @@ void UserDataMigrator::AutoImport(QMainWindow* main_window, const std::string& o
 
     if (failure.isEmpty()) {
         migrated = true;
+        QStringList parts;
+        if (choice->saves) {
+            parts << QObject::tr("saves and keys");
+        }
+        if (choice->settings) {
+            parts << QObject::tr("settings");
+        }
+        if (choice->mods) {
+            parts << QObject::tr("mods");
+        }
+        QString what = parts.join(QStringLiteral(", "));
+        what[0] = what[0].toUpper();
         QString text = QObject::tr("Fritchii now keeps its data in its own folder:\n%1\n\n"
-                                   "Your settings, saves, keys and mods were copied from the %2 "
-                                   "folder.")
-                           .arg(destination_text, folder);
+                                   "%2 copied from the %3 folder.")
+                           .arg(destination_text, what, folder);
         if (!import.linked.empty()) {
             text += QObject::tr("\n\n%1 was too big to copy, so it is shared with the old folder. "
                                 "Keep that folder.")

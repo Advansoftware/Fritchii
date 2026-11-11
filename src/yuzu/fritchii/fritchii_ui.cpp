@@ -2,6 +2,8 @@
 
 #include "yuzu/fritchii/fritchii_ui.h"
 
+#include <algorithm>
+#include <array>
 #include <map>
 #include <string_view>
 
@@ -34,6 +36,7 @@
 #include "common/fs/fs_paths.h"
 #include "common/fs/path_util.h"
 #include "frontend_common/profile_import.h"
+#include "yuzu/user_data_migration.h"
 #include "common/logging.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
@@ -548,42 +551,21 @@ void CopyDataFromOldFolder(QMainWindow& window) {
                                     "lichii.exe."));
         return;
     }
-    std::vector<std::string> folders;
-    for (const EmuPath path : {LegacyEdenDir, LichiiDir}) {
-        if (fs::is_directory(GetLegacyPath(path))) {
-            folders.push_back(PathToUTF8String(GetLegacyPath(path).filename()));
-        }
-    }
-    if (folders.empty()) {
+    const bool any = std::ranges::any_of(
+        std::array{LegacyEdenDir, LichiiDir, YuzuDir, SuyuDir, SudachiDir, CitronDir},
+        [](EmuPath path) { return fs::is_directory(GetLegacyPath(path)); });
+    if (!any) {
         QMessageBox::information(&window, QStringLiteral("Fritchii"),
                                  QObject::tr("No eden or lichii folder was found in %APPDATA%."));
         return;
     }
-    QMessageBox box(QMessageBox::Question, QStringLiteral("Fritchii"),
-                    QObject::tr("Copy your settings, saves, keys and mods from another folder?\n\n"
-                       "Fritchii restarts and copies them over its own. Its current data is kept "
-                       "next to it in backup folders, and the folder you copy from is not "
-                       "changed."),
-                    QMessageBox::NoButton, &window);
-    std::vector<std::pair<QAbstractButton*, std::string>> choices;
-    for (const auto& folder : folders) {
-        choices.emplace_back(box.addButton(QObject::tr("Copy from %1").arg(QString::fromStdString(folder)),
-                                           QMessageBox::AcceptRole),
-                             folder);
-    }
-    box.addButton(QMessageBox::Cancel);
-    box.exec();
-    std::string chosen;
-    for (const auto& [button, folder] : choices) {
-        if (box.clickedButton() == button) {
-            chosen = folder;
-        }
-    }
-    if (chosen.empty()) {
+    // The same dialog as the first launch (v5.8.2): which folder, and saves / settings / mods.
+    const auto choice = UserDataMigrator::AskImport(&window, true);
+    if (!choice) {
         return;
     }
     try {
-        FrontendCommon::RequestProfileImport(chosen);
+        FrontendCommon::RequestProfileImport(choice->Serialize());
     } catch (const std::exception& error) {
         QMessageBox::warning(&window, QStringLiteral("Fritchii"), QString::fromUtf8(error.what()));
         return;

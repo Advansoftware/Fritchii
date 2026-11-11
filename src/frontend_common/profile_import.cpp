@@ -75,13 +75,16 @@ std::string TakeProfileImportRequest() {
     if (!fs::exists(request, ec)) {
         return {};
     }
-    std::string folder;
+    std::string text;
     {
         std::ifstream file{request};
-        std::getline(file, folder);
+        text.assign(std::istreambuf_iterator<char>{file}, {});
     }
     fs::remove(request, ec);
-    if (folder != "eden" && folder != "lichii") {
+    // The first line names the folder; v5.8.2 adds what to copy on the next lines.
+    const std::string folder = text.substr(0, text.find('\n'));
+    constexpr std::array known{"eden", "lichii", "yuzu", "suyu", "sudachi", "citron"};
+    if (std::ranges::find(known, folder) == known.end()) {
         return {};
     }
     // The Fritchii that asked is closing: let it finish writing its config first.
@@ -95,7 +98,7 @@ std::string TakeProfileImportRequest() {
             fs::remove_all(entry.path(), ec);
         }
     }
-    return folder;
+    return text;
 #endif
 }
 
