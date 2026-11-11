@@ -488,7 +488,7 @@ QString BackupSettings() {
         return {};
     }
     bool ok = true;
-    for (const QString name : {QStringLiteral("qt-config.ini"), QStringLiteral("frizti.ini")}) {
+    for (const QString& name : {QStringLiteral("qt-config.ini"), QStringLiteral("frizti.ini")}) {
         if (config.exists(name)) {
             ok &= QFile::copy(config.filePath(name), QDir(folder).filePath(name));
         }
@@ -528,7 +528,7 @@ bool RestoreSettingsFiles(const QString& backup) {
         return false;
     }
     bool ok = true;
-    for (const QString name : {QStringLiteral("qt-config.ini"), QStringLiteral("frizti.ini")}) {
+    for (const QString& name : {QStringLiteral("qt-config.ini"), QStringLiteral("frizti.ini")}) {
         if (from.exists(name)) {
             QFile::remove(config.filePath(name));
             ok &= QFile::copy(from.filePath(name), config.filePath(name));

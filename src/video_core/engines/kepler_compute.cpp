@@ -1661,7 +1661,7 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
     if (!BypassEnabled(program_id)) {
         return false;
     }
-    static const bool logged = [] {
+    static const bool logged_skip = [] {
         LOG_INFO(HW_GPU, "Ocarina of Time anti-aliasing: network skipped ({})",
                  Settings::values.oot_anti_aliasing.GetValue() ==
                          Settings::OotAntiAliasing::Automatic
@@ -1669,7 +1669,7 @@ bool KeplerCompute::BypassOotNetwork(u64 program_id, u64 native_key) {
                      : "No sharpening");
         return true;
     }();
-    (void)logged;
+    (void)logged_skip;
     auto* const state = rasterizer->OotNetworkBypass();
     if (!state) {
         return false;
