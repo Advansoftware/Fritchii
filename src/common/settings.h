@@ -65,6 +65,8 @@ SETTING(u16, false);
 SWITCHABLE(AnisotropyMode, true);
 SWITCHABLE(AntiAliasing, false);
 SWITCHABLE(OotAntiAliasing, false);
+SWITCHABLE(DlssPreset, false);
+SWITCHABLE(NvidiaDlssQuality, false);
 SWITCHABLE(OotRefreshCap, false);
 SWITCHABLE(OotMovieUpscale, false);
 SWITCHABLE(AspectRatio, true);
@@ -397,7 +399,8 @@ struct Values {
     // The DLSS model (preset) for every mode: K by default (NVIDIA's defaults for Performance and
     // Ultra Performance drew thin lines); Default leaves the choice to NVIDIA. EDEN_NX2_DLSS_PRESET
     // still overrides it. Applies live (Apply/OK while playing).
-    Setting<DlssPreset> nvidia_dlss_preset{linkage,
+    // v5.8.4: per game as well (the owner: "in game settings and not just global").
+    SwitchableSetting<DlssPreset> nvidia_dlss_preset{linkage,
                                            DlssPreset::K,
                                            "nvidia_dlss_preset",
                                            Category::Renderer,
@@ -407,7 +410,7 @@ struct Values {
     // The DLSS mode (zortos293/Lichii#1249): Automatic picks it from the game's render and output
     // sizes as before; an explicit mode applies when the render size fits NVIDIA's range for it.
     // Native (DLAA) keeps the game's render size. Applies live too.
-    Setting<NvidiaDlssQuality> nvidia_dlss_quality{linkage,
+    SwitchableSetting<NvidiaDlssQuality> nvidia_dlss_quality{linkage,
                                                    NvidiaDlssQuality::Automatic,
                                                    "nvidia_dlss_quality",
                                                    Category::Renderer,
